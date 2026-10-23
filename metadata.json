@@ -1,0 +1,6 @@
+{
+  "name": "LUMOS PRO - Diagnóstico de Clientes",
+  "description": "Sistema interno de diagnóstico e avaliação de clientes em Instagram, Tráfego e Comercial da Agência LUMOS.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
