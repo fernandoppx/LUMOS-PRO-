@@ -12,74 +12,27 @@ import {
 import {
   DEFAULT_PILARES,
   DEFAULT_CRITERIOS,
-  INITIAL_DEMO_CLIENTS,
-  INITIAL_DEMO_DIAGNOSTICS,
-  INITIAL_DEMO_AVALIACOES,
 } from '../data/diagnosticData';
 import { getFaixaFromMedia, getRotuloPadrao } from '../utils/formatters';
+import { supabase } from './supabase';
 
-const LOCAL_CLIENTES_KEY = 'lumos_local_clientes_v2';
-const LOCAL_DIAGNOSTICOS_KEY = 'lumos_local_diagnosticos_v2';
-const LOCAL_AVALIACOES_KEY = 'lumos_local_avaliacoes_v2';
-
-// Purge any legacy demo data from localStorage on load
-function purgeDemoData(): void {
-  try {
-    const rawClients = localStorage.getItem(LOCAL_CLIENTES_KEY);
-    if (rawClients) {
-      const parsed: Cliente[] = JSON.parse(rawClients);
-      const filtered = parsed.filter((c) => !c.id.startsWith('demo-'));
-      if (filtered.length !== parsed.length) {
-        localStorage.setItem(LOCAL_CLIENTES_KEY, JSON.stringify(filtered));
-      }
-    }
-    const rawDiags = localStorage.getItem(LOCAL_DIAGNOSTICOS_KEY);
-    if (rawDiags) {
-      const parsed: Diagnostico[] = JSON.parse(rawDiags);
-      const filtered = parsed.filter(
-        (d) => !d.id.startsWith('demo-') && !d.cliente_id.startsWith('demo-')
-      );
-      if (filtered.length !== parsed.length) {
-        localStorage.setItem(LOCAL_DIAGNOSTICOS_KEY, JSON.stringify(filtered));
-      }
-    }
-    const rawAvals = localStorage.getItem(LOCAL_AVALIACOES_KEY);
-    if (rawAvals) {
-      const parsed: Avaliacao[] = JSON.parse(rawAvals);
-      const filtered = parsed.filter((a) => !a.diagnostico_id.startsWith('demo-'));
-      if (filtered.length !== parsed.length) {
-        localStorage.setItem(LOCAL_AVALIACOES_KEY, JSON.stringify(filtered));
-      }
-    }
-  } catch (e) {
-    // ignore
-  }
+// Backups in localStorage remain untouched. Do not clear them before migrating.
+// This repository now uses Supabase as its ONLY live data source.
+async function currentUserId(): Promise<string> {
+  const { data, error } = await supabase.auth.getUser();
+  if (error) throw error;
+  if (!data.user) throw new Error('Sua sessão expirou. Entre novamente no Lumos PRO.');
+  return data.user.id;
 }
 
-purgeDemoData();
-
-function getLocalItems<T>(key: string, defaultItems: T[] = []): T[] {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) {
-      if (defaultItems.length > 0) {
-        localStorage.setItem(key, JSON.stringify(defaultItems));
-      }
-      return defaultItems;
-    }
-    return JSON.parse(raw);
-  } catch (e) {
-    console.error(`Erro ao ler ${key} do localStorage:`, e);
-    return defaultItems;
-  }
+function fail(operation: string, error: unknown): never {
+  console.error(`Supabase - ${operation}:`, error);
+  const detail = error instanceof Error ? error.message : String(error);
+  throw new Error(`Erro ao ${operation}: ${detail}`);
 }
 
-function setLocalItems<T>(key: string, items: T[]): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(items));
-  } catch (e) {
-    console.error(`Erro ao salvar ${key} no localStorage:`, e);
-  }
+function assertOk(operation: string, error: unknown): void {
+  if (error) fail(operation, error);
 }
 
 // Compute scores for a specific diagnostic
@@ -158,180 +111,157 @@ export function computeDiagnosticScores(
 }
 
 export const dataRepository = {
-  // PILARES & CRITERIOS
+  // PILARES & CRITERIOS: IDs must come from the same database used by avaliacoes.
   async getPilares(): Promise<Pilar[]> {
-    return DEFAULT_PILARES;
+    const { data, error } = await supabase.from('pilares').select('*').order('ordem');
+    assertOk('consultar pilares', error);
+    return (data ?? []) as Pilar[];
   },
 
   async getCriterios(): Promise<Criterio[]> {
-    return DEFAULT_CRITERIOS;
+    const { data, error } = await supabase.from('criterios').select('*').eq('ativo', true).order('ordem');
+    assertOk('consultar critérios', error);
+    return (data ?? []) as Criterio[];
   },
 
   // CLIENTES
   async getClients(): Promise<Cliente[]> {
-    return getLocalItems<Cliente>(LOCAL_CLIENTES_KEY, INITIAL_DEMO_CLIENTS);
+    await currentUserId();
+    const { data, error } = await supabase.from('clientes').select('*').order('created_at', { ascending: false });
+    assertOk('listar clientes', error);
+    return (data ?? []) as Cliente[];
   },
 
   async getClientById(id: string): Promise<Cliente | null> {
-    const clients = await this.getClients();
-    return clients.find((c) => c.id === id) || null;
+    await currentUserId();
+    const { data, error } = await supabase.from('clientes').select('*').eq('id', id).maybeSingle();
+    assertOk('consultar cliente', error);
+    return (data as Cliente | null) ?? null;
   },
 
   async createClient(clientData: Partial<Cliente>): Promise<{ client: Cliente; isLocal: boolean }> {
-    const clients = await this.getClients();
-    const newRecord: Cliente = {
-      id: clientData.id || crypto.randomUUID(),
-      nome: clientData.nome || 'Cliente sem nome',
-      instagram: clientData.instagram || null,
-      segmento: clientData.segmento || null,
-      cidade: clientData.cidade || null,
-      whatsapp: clientData.whatsapp || null,
-      site: clientData.site || null,
-      responsavel: clientData.responsavel || null,
-      observacoes: clientData.observacoes || null,
-      ativo: true,
-      criado_por: clientData.criado_por || 'lumos-user',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+    const userId = await currentUserId();
+    const record = {
+      nome: clientData.nome?.trim() || 'Cliente sem nome',
+      segmento: clientData.segmento ?? null,
+      instagram: clientData.instagram ?? null,
+      site: clientData.site ?? null,
+      whatsapp: clientData.whatsapp ?? null,
+      cidade: clientData.cidade ?? null,
+      responsavel: clientData.responsavel ?? null,
+      observacoes: clientData.observacoes ?? null,
+      ativo: clientData.ativo ?? true,
+      criado_por: userId,
     };
-
-    clients.unshift(newRecord);
-    setLocalItems(LOCAL_CLIENTES_KEY, clients);
-    return { client: newRecord, isLocal: true };
+    const { data, error } = await supabase.from('clientes').insert(record).select('*').single();
+    assertOk('cadastrar cliente', error);
+    return { client: data as Cliente, isLocal: false };
   },
 
   async updateClient(id: string, updates: Partial<Cliente>): Promise<Cliente> {
-    const clients = await this.getClients();
-    const index = clients.findIndex((c) => c.id === id);
-    if (index >= 0) {
-      clients[index] = {
-        ...clients[index],
-        ...updates,
-        updated_at: new Date().toISOString(),
-      };
-      setLocalItems(LOCAL_CLIENTES_KEY, clients);
-      return clients[index];
-    }
-    throw new Error('Cliente não encontrado');
+    await currentUserId();
+    const { id: _id, criado_por: _author, created_at: _created, ...editable } = updates;
+    const { data, error } = await supabase.from('clientes')
+      .update({ ...editable, updated_at: new Date().toISOString() })
+      .eq('id', id).select('*').single();
+    assertOk('atualizar cliente', error);
+    return data as Cliente;
   },
 
   async deleteClient(id: string): Promise<void> {
-    const clients = await this.getClients();
-    setLocalItems(
-      LOCAL_CLIENTES_KEY,
-      clients.filter((c) => c.id !== id)
-    );
-
-    // Also delete client's diagnostics and evaluations
-    const diags = await this.getDiagnosticsByClient(id);
-    const diagIds = new Set(diags.map((d) => d.id));
-    const allDiags = getLocalItems<Diagnostico>(LOCAL_DIAGNOSTICOS_KEY);
-    setLocalItems(
-      LOCAL_DIAGNOSTICOS_KEY,
-      allDiags.filter((d) => d.cliente_id !== id)
-    );
-
-    const allAvals = getLocalItems<Avaliacao>(LOCAL_AVALIACOES_KEY);
-    setLocalItems(
-      LOCAL_AVALIACOES_KEY,
-      allAvals.filter((a) => !diagIds.has(a.diagnostico_id))
-    );
+    await currentUserId();
+    // Delete children first, without relying on FK ON DELETE CASCADE.
+    const { data: diagnostics, error: dErr } = await supabase
+      .from('diagnosticos').select('id').eq('cliente_id', id);
+    assertOk('listar diagnósticos para exclusão', dErr);
+    for (const d of diagnostics ?? []) {
+      await this.deleteDiagnostic(d.id);
+    }
+    const { error } = await supabase.from('clientes').delete().eq('id', id);
+    assertOk('excluir cliente', error);
   },
 
   // DIAGNOSTICOS
   async getDiagnosticsByClient(clienteId: string): Promise<Diagnostico[]> {
-    const all = getLocalItems<Diagnostico>(LOCAL_DIAGNOSTICOS_KEY, INITIAL_DEMO_DIAGNOSTICS);
-    return all
-      .filter((d) => d.cliente_id === clienteId)
-      .sort((a, b) => new Date(b.data_referencia).getTime() - new Date(a.data_referencia).getTime());
+    await currentUserId();
+    const { data, error } = await supabase.from('diagnosticos')
+      .select('*').eq('cliente_id', clienteId).order('data_referencia', { ascending: false });
+    assertOk('listar diagnósticos', error);
+    return (data ?? []) as Diagnostico[];
   },
 
   async getDiagnosticById(id: string): Promise<Diagnostico | null> {
-    const all = getLocalItems<Diagnostico>(LOCAL_DIAGNOSTICOS_KEY, INITIAL_DEMO_DIAGNOSTICS);
-    return all.find((d) => d.id === id) || null;
+    await currentUserId();
+    const { data, error } = await supabase.from('diagnosticos').select('*').eq('id', id).maybeSingle();
+    assertOk('consultar diagnóstico', error);
+    return (data as Diagnostico | null) ?? null;
   },
 
   async createDiagnostic(clienteId: string, userId?: string | null): Promise<Diagnostico> {
-    const all = getLocalItems<Diagnostico>(LOCAL_DIAGNOSTICOS_KEY, INITIAL_DEMO_DIAGNOSTICS);
-    const today = new Date().toISOString().split('T')[0];
-    const newRecord: Diagnostico = {
-      id: crypto.randomUUID(),
+    const actorId = await currentUserId();
+    const { data, error } = await supabase.from('diagnosticos').insert({
       cliente_id: clienteId,
-      data_referencia: today,
+      data_referencia: new Date().toISOString().slice(0, 10),
       status: 'rascunho',
       resumo: '',
       compartilhado: false,
       share_token: crypto.randomUUID(),
-      criado_por: userId || 'lumos-user',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-
-    all.unshift(newRecord);
-    setLocalItems(LOCAL_DIAGNOSTICOS_KEY, all);
-    return newRecord;
+      criado_por: actorId, // never trust an arbitrary ID passed from the browser
+    }).select('*').single();
+    assertOk('criar diagnóstico', error);
+    return data as Diagnostico;
   },
 
   async updateDiagnostic(id: string, updates: Partial<Diagnostico>): Promise<Diagnostico> {
-    const all = getLocalItems<Diagnostico>(LOCAL_DIAGNOSTICOS_KEY, INITIAL_DEMO_DIAGNOSTICS);
-    const idx = all.findIndex((d) => d.id === id);
-    if (idx >= 0) {
-      all[idx] = {
-        ...all[idx],
-        ...updates,
-        updated_at: new Date().toISOString(),
-      };
-      setLocalItems(LOCAL_DIAGNOSTICOS_KEY, all);
-      return all[idx];
-    }
-    throw new Error('Diagnóstico não encontrado');
+    await currentUserId();
+    const { id: _id, cliente_id: _clientId, criado_por: _author, created_at: _created, ...editable } = updates;
+    const { data, error } = await supabase.from('diagnosticos')
+      .update({ ...editable, updated_at: new Date().toISOString() })
+      .eq('id', id).select('*').single();
+    assertOk('atualizar diagnóstico', error);
+    return data as Diagnostico;
   },
 
   async deleteDiagnostic(id: string): Promise<void> {
-    const all = getLocalItems<Diagnostico>(LOCAL_DIAGNOSTICOS_KEY, INITIAL_DEMO_DIAGNOSTICS);
-    setLocalItems(
-      LOCAL_DIAGNOSTICOS_KEY,
-      all.filter((d) => d.id !== id)
-    );
-
-    const avals = getLocalItems<Avaliacao>(LOCAL_AVALIACOES_KEY, INITIAL_DEMO_AVALIACOES);
-    setLocalItems(
-      LOCAL_AVALIACOES_KEY,
-      avals.filter((a) => a.diagnostico_id !== id)
-    );
+    await currentUserId();
+    const { error: aErr } = await supabase.from('avaliacoes').delete().eq('diagnostico_id', id);
+    assertOk('excluir avaliações', aErr);
+    const { error } = await supabase.from('diagnosticos').delete().eq('id', id);
+    assertOk('excluir diagnóstico', error);
   },
 
   // AVALIACOES
   async getAvaliacoes(diagnosticId: string): Promise<Avaliacao[]> {
-    const all = getLocalItems<Avaliacao>(LOCAL_AVALIACOES_KEY, INITIAL_DEMO_AVALIACOES);
-    return all.filter((a) => a.diagnostico_id === diagnosticId);
+    await currentUserId();
+    const { data, error } = await supabase.from('avaliacoes')
+      .select('*').eq('diagnostico_id', diagnosticId);
+    assertOk('consultar avaliações', error);
+    return (data ?? []) as Avaliacao[];
   },
 
   async saveAvaliacoes(
     diagnosticId: string,
     items: Array<{ criterio_id: string; nota: number | null; solucao: string | null }>
   ): Promise<void> {
-    const allLocal = getLocalItems<Avaliacao>(LOCAL_AVALIACOES_KEY, INITIAL_DEMO_AVALIACOES);
-
-    items.forEach((item) => {
-      const existingIdx = allLocal.findIndex(
-        (a) => a.diagnostico_id === diagnosticId && a.criterio_id === item.criterio_id
-      );
-      const newAv: Avaliacao = {
-        diagnostico_id: diagnosticId,
-        criterio_id: item.criterio_id,
-        nota: item.nota,
-        solucao: item.solucao,
-      };
-
-      if (existingIdx >= 0) {
-        allLocal[existingIdx] = newAv;
+    await currentUserId();
+    if (!items.length) return;
+    const { data: existing, error: readError } = await supabase
+      .from('avaliacoes').select('id, criterio_id').eq('diagnostico_id', diagnosticId);
+    assertOk('localizar avaliações existentes', readError);
+    const byCriterion = new Map((existing ?? []).map((row) => [row.criterio_id, row.id]));
+    for (const item of items) {
+      const record = { nota: item.nota, solucao: item.solucao };
+      const existingId = byCriterion.get(item.criterio_id);
+      if (existingId) {
+        const { error } = await supabase.from('avaliacoes').update(record).eq('id', existingId);
+        assertOk('atualizar avaliação', error);
       } else {
-        allLocal.push(newAv);
+        const { error } = await supabase.from('avaliacoes').insert({
+          diagnostico_id: diagnosticId, criterio_id: item.criterio_id, ...record,
+        });
+        assertOk('salvar avaliação', error);
       }
-    });
-
-    setLocalItems(LOCAL_AVALIACOES_KEY, allLocal);
+    }
   },
 
   // SCORES & VIEWS
@@ -343,7 +273,7 @@ export const dataRepository = {
 
     const client = await this.getClientById(diag.cliente_id);
     const avaliacoes = await this.getAvaliacoes(diagnosticId);
-    return computeDiagnosticScores(diag, client, avaliacoes);
+    return computeDiagnosticScores(diag, client, avaliacoes, await this.getCriterios(), await this.getPilares());
   },
 
   async getDiagnosticScoresByClient(clienteId: string): Promise<ScoreDiagnosticoView[]> {
@@ -353,7 +283,7 @@ export const dataRepository = {
     const result: ScoreDiagnosticoView[] = [];
     for (const d of diags) {
       const avals = await this.getAvaliacoes(d.id);
-      const { diagScore } = computeDiagnosticScores(d, client, avals);
+      const { diagScore } = computeDiagnosticScores(d, client, avals, await this.getCriterios(), await this.getPilares());
       result.push(diagScore);
     }
     return result;
@@ -371,7 +301,7 @@ export const dataRepository = {
       if (diags.length > 0) {
         const latestDiag = diags[0];
         const avals = await this.getAvaliacoes(latestDiag.id);
-        const { diagScore } = computeDiagnosticScores(latestDiag, client, avals);
+        const { diagScore } = computeDiagnosticScores(latestDiag, client, avals, await this.getCriterios(), await this.getPilares());
         latestScore = diagScore;
       }
       result.push({
@@ -385,19 +315,29 @@ export const dataRepository = {
 
   // PUBLIC REPORT (Matches specification: only if compartilhado = true and status = finalizado)
   async getPublicReport(token: string): Promise<PublicReportData | null> {
-    const allDiags = getLocalItems<Diagnostico>(LOCAL_DIAGNOSTICOS_KEY, INITIAL_DEMO_DIAGNOSTICS);
-    const diag = allDiags.find((d) => d.share_token === token);
+    const { data: diagData, error } = await supabase.from('diagnosticos')
+      .select('*').eq('share_token', token).eq('compartilhado', true)
+      .eq('status', 'finalizado').maybeSingle();
+    assertOk('consultar relatório compartilhado', error);
+    const diag = diagData as Diagnostico | null;
 
     if (!diag || !diag.compartilhado || diag.status !== 'finalizado') {
       return null;
     }
 
-    const client = await this.getClientById(diag.cliente_id);
+    // Public reports require explicit, narrow SELECT policies for shared diagnostics.
+    const { data: clientData, error: clientError } = await supabase
+      .from('clientes').select('*').eq('id', diag.cliente_id).maybeSingle();
+    assertOk('consultar cliente do relatório', clientError);
+    const client = clientData as Cliente | null;
     if (!client) return null;
 
-    const avaliacoes = await this.getAvaliacoes(diag.id);
-    const criterios = DEFAULT_CRITERIOS;
-    const pilares = DEFAULT_PILARES;
+    const { data: avaliacoesData, error: avaliacoesError } = await supabase
+      .from('avaliacoes').select('*').eq('diagnostico_id', diag.id);
+    assertOk('consultar avaliações públicas', avaliacoesError);
+    const avaliacoes = (avaliacoesData ?? []) as Avaliacao[];
+    const criterios = await this.getCriterios();
+    const pilares = await this.getPilares();
 
     const reportPilares = pilares.map((pilar) => {
       const pCrit = criterios.filter((c) => c.pilar_id === pilar.id && c.ativo);
@@ -446,16 +386,12 @@ export const dataRepository = {
     };
   },
 
-  // Clear data
+  // Legacy reset buttons must not delete shared production data.
   resetToDemo(): void {
-    setLocalItems(LOCAL_CLIENTES_KEY, []);
-    setLocalItems(LOCAL_DIAGNOSTICOS_KEY, []);
-    setLocalItems(LOCAL_AVALIACOES_KEY, []);
+    console.warn('resetToDemo desativado: dados compartilhados preservados.');
   },
 
   clearAll(): void {
-    setLocalItems(LOCAL_CLIENTES_KEY, []);
-    setLocalItems(LOCAL_DIAGNOSTICOS_KEY, []);
-    setLocalItems(LOCAL_AVALIACOES_KEY, []);
+    console.warn('clearAll desativado: exclusão global bloqueada por segurança.');
   },
 };
