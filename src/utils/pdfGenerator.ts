@@ -1,6 +1,24 @@
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas-pro';
 
+/**
+ * Congela a aparência calculada pelo navegador no documento clonado.
+ * Evita que html2canvas-pro perca o Tailwind ou as fontes durante
+ * o carregamento de CSS no ambiente publicado.
+ */
+function preserveComputedStyles(original: HTMLElement, cloned: HTMLElement): void {
+  const originalElements = [original, ...Array.from(original.querySelectorAll<HTMLElement>('*'))];
+  const clonedElements = [cloned, ...Array.from(cloned.querySelectorAll<HTMLElement>('*'))];
+  for (let i = 0; i < originalElements.length && i < clonedElements.length; i++) {
+    const style = window.getComputedStyle(originalElements[i]);
+    const target = clonedElements[i];
+    for (let j = 0; j < style.length; j++) {
+      const property = style.item(j);
+      target.style.setProperty(property, style.getPropertyValue(property), style.getPropertyPriority(property));
+    }
+  }
+}
+
 /** Exporta as seções .pdf-page em A4, respeitando a altura real de cada seção. */
 export async function exportElementToPdf(elementId: string, filename: string): Promise<void> {
   const container = document.getElementById(elementId);
@@ -31,7 +49,19 @@ export async function exportElementToPdf(elementId: string, filename: string): P
     container.style.top = '0px';
     container.style.zIndex = '-1';
 
+    // Aguardar folhas de estilo e fontes antes de iniciar a primeira página.
+    const styleSheets = Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'));
+    await Promise.all(styleSheets.map(link => {
+      if (link.sheet) return Promise.resolve();
+      return new Promise<void>(resolve => {
+        const finish = () => resolve();
+        link.addEventListener('load', finish, { once: true });
+        link.addEventListener('error', finish, { once: true });
+        setTimeout(finish, 8000);
+      });
+    }));
     if (document.fonts?.ready) await document.fonts.ready;
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
     const images = Array.from(container.querySelectorAll('img'));
     await Promise.all(images.map(async (img) => {
       if (img.complete) return;
@@ -52,6 +82,15 @@ export async function exportElementToPdf(elementId: string, filename: string): P
         height: Math.ceil(section.scrollHeight),
         scrollX: 0,
         scrollY: -window.scrollY,
+        onclone: (clonedDocument) => {
+          const cloneContainer = clonedDocument.getElementById(elementId);
+          if (!cloneContainer) throw new Error('Relatório não encontrado no documento de captura.');
+          const clonePages = Array.from(cloneContainer.querySelectorAll<HTMLElement>('.pdf-page'));
+          const sourceIndex = sections.indexOf(section);
+          const clonedSection = clonePages.length ? clonePages[sourceIndex] : cloneContainer;
+          if (!clonedSection) throw new Error('Página não encontrada na cópia do relatório.');
+          preserveComputedStyles(section, clonedSection);
+        },
       });
       if (!canvas.width || !canvas.height) throw new Error('Uma página do relatório ficou vazia.');
 
