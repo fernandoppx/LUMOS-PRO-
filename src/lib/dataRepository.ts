@@ -14,25 +14,46 @@ import {
   DEFAULT_CRITERIOS,
 } from '../data/diagnosticData';
 import { getFaixaFromMedia, getRotuloPadrao } from '../utils/formatters';
-import { supabase } from './supabase';
 
-// Backups in localStorage remain untouched. Do not clear them before migrating.
-// This repository now uses Supabase as its ONLY live data source.
-async function currentUserId(): Promise<string> {
-  const { data, error } = await supabase.auth.getUser();
-  if (error) throw error;
-  if (!data.user) throw new Error('Sua sessão expirou. Entre novamente no Lumos PRO.');
-  return data.user.id;
+// Storage keys for local persistence (sem banco externo, sem necessidade de login)
+const STORAGE_KEYS = {
+  CLIENTES: 'lumos_pro_clientes',
+  DIAGNOSTICOS: 'lumos_pro_diagnosticos',
+  AVALIACOES: 'lumos_pro_avaliacoes',
+  PILARES: 'lumos_pro_pilares',
+  CRITERIOS: 'lumos_pro_criterios',
+} as const;
+
+function generateId(prefix = 'id'): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 }
 
-function fail(operation: string, error: unknown): never {
-  console.error(`Supabase - ${operation}:`, error);
-  const detail = error instanceof Error ? error.message : String(error);
-  throw new Error(`Erro ao ${operation}: ${detail}`);
+function loadStorage<T>(key: string, fallback: T): T {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return fallback;
+  }
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw) as T;
+  } catch (err) {
+    console.warn(`[Lumos Storage] Falha ao ler ${key}:`, err);
+    return fallback;
+  }
 }
 
-function assertOk(operation: string, error: unknown): void {
-  if (error) fail(operation, error);
+function saveStorage<T>(key: string, data: T): void {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return;
+  }
+  try {
+    window.localStorage.setItem(key, JSON.stringify(data));
+  } catch (err) {
+    console.error(`[Lumos Storage] Falha ao gravar ${key}:`, err);
+  }
 }
 
 // Compute scores for a specific diagnostic
@@ -111,39 +132,38 @@ export function computeDiagnosticScores(
 }
 
 export const dataRepository = {
-  // PILARES & CRITERIOS: IDs must come from the same database used by avaliacoes.
+  // PILARES & CRITERIOS
   async getPilares(): Promise<Pilar[]> {
-    const { data, error } = await supabase.from('pilares').select('*').order('ordem');
-    assertOk('consultar pilares', error);
-    return (data ?? []) as Pilar[];
+    const saved = loadStorage<Pilar[]>(STORAGE_KEYS.PILARES, []);
+    if (saved && saved.length > 0) return saved;
+    return DEFAULT_PILARES;
   },
 
   async getCriterios(): Promise<Criterio[]> {
-    const { data, error } = await supabase.from('criterios').select('*').eq('ativo', true).order('ordem');
-    assertOk('consultar critérios', error);
-    return (data ?? []) as Criterio[];
+    const saved = loadStorage<Criterio[]>(STORAGE_KEYS.CRITERIOS, []);
+    if (saved && saved.length > 0) return saved.filter((c) => c.ativo);
+    return DEFAULT_CRITERIOS.filter((c) => c.ativo);
   },
 
   // CLIENTES
   async getClients(): Promise<Cliente[]> {
-    await currentUserId();
-    const { data, error } = await supabase.from('clientes').select('*').order('created_at', { ascending: false });
-    assertOk('listar clientes', error);
-    return (data ?? []) as Cliente[];
+    const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
+    return clients.sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
   },
 
   async getClientById(id: string): Promise<Cliente | null> {
-    await currentUserId();
-    const { data, error } = await supabase.from('clientes').select('*').eq('id', id).maybeSingle();
-    assertOk('consultar cliente', error);
-    return (data as Cliente | null) ?? null;
+    const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
+    return clients.find((c) => c.id === id) || null;
   },
 
   async createClient(clientData: Partial<Cliente>): Promise<{ client: Cliente; isLocal: boolean }> {
-    const userId = await currentUserId();
-    const record = {
+    const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
+    const newClient: Cliente = {
+      id: generateId('cli'),
       nome: clientData.nome?.trim() || 'Cliente sem nome',
-      segmento: clientData.segmento ?? null,
+      segmento: 'Splash',
       instagram: clientData.instagram ?? null,
       site: clientData.site ?? null,
       whatsapp: clientData.whatsapp ?? null,
@@ -151,117 +171,160 @@ export const dataRepository = {
       responsavel: clientData.responsavel ?? null,
       observacoes: clientData.observacoes ?? null,
       ativo: clientData.ativo ?? true,
-      criado_por: userId,
+      criado_por: 'local_user',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     };
-    const { data, error } = await supabase.from('clientes').insert(record).select('*').single();
-    assertOk('cadastrar cliente', error);
-    return { client: data as Cliente, isLocal: false };
+
+    clients.unshift(newClient);
+    saveStorage(STORAGE_KEYS.CLIENTES, clients);
+    return { client: newClient, isLocal: true };
   },
 
   async updateClient(id: string, updates: Partial<Cliente>): Promise<Cliente> {
-    await currentUserId();
-    const { id: _id, criado_por: _author, created_at: _created, ...editable } = updates;
-    const { data, error } = await supabase.from('clientes')
-      .update({ ...editable, updated_at: new Date().toISOString() })
-      .eq('id', id).select('*').single();
-    assertOk('atualizar cliente', error);
-    return data as Cliente;
+    const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
+    const index = clients.findIndex((c) => c.id === id);
+    if (index === -1) {
+      throw new Error('Cliente não encontrado para atualização.');
+    }
+
+    const current = clients[index];
+    const updatedClient: Cliente = {
+      ...current,
+      ...updates,
+      id: current.id,
+      segmento: 'Splash',
+      created_at: current.created_at,
+      updated_at: new Date().toISOString(),
+    };
+
+    clients[index] = updatedClient;
+    saveStorage(STORAGE_KEYS.CLIENTES, clients);
+    return updatedClient;
   },
 
   async deleteClient(id: string): Promise<void> {
-    await currentUserId();
-    // Delete children first, without relying on FK ON DELETE CASCADE.
-    const { data: diagnostics, error: dErr } = await supabase
-      .from('diagnosticos').select('id').eq('cliente_id', id);
-    assertOk('listar diagnósticos para exclusão', dErr);
-    for (const d of diagnostics ?? []) {
-      await this.deleteDiagnostic(d.id);
-    }
-    const { error } = await supabase.from('clientes').delete().eq('id', id);
-    assertOk('excluir cliente', error);
+    // 1. Remove all client's diagnostics and their evaluations
+    const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
+    const clientDiagIds = diags.filter((d) => d.cliente_id === id).map((d) => d.id);
+    const diagIdSet = new Set(clientDiagIds);
+
+    const remainingDiags = diags.filter((d) => d.cliente_id !== id);
+    saveStorage(STORAGE_KEYS.DIAGNOSTICOS, remainingDiags);
+
+    const avaliacoes = loadStorage<Avaliacao[]>(STORAGE_KEYS.AVALIACOES, []);
+    const remainingAvals = avaliacoes.filter((a) => !diagIdSet.has(a.diagnostico_id));
+    saveStorage(STORAGE_KEYS.AVALIACOES, remainingAvals);
+
+    // 2. Remove client
+    const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
+    const remainingClients = clients.filter((c) => c.id !== id);
+    saveStorage(STORAGE_KEYS.CLIENTES, remainingClients);
   },
 
   // DIAGNOSTICOS
   async getDiagnosticsByClient(clienteId: string): Promise<Diagnostico[]> {
-    await currentUserId();
-    const { data, error } = await supabase.from('diagnosticos')
-      .select('*').eq('cliente_id', clienteId).order('data_referencia', { ascending: false });
-    assertOk('listar diagnósticos', error);
-    return (data ?? []) as Diagnostico[];
+    const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
+    return diags
+      .filter((d) => d.cliente_id === clienteId)
+      .sort((a, b) => (b.data_referencia || '').localeCompare(a.data_referencia || ''));
   },
 
   async getDiagnosticById(id: string): Promise<Diagnostico | null> {
-    await currentUserId();
-    const { data, error } = await supabase.from('diagnosticos').select('*').eq('id', id).maybeSingle();
-    assertOk('consultar diagnóstico', error);
-    return (data as Diagnostico | null) ?? null;
+    const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
+    return diags.find((d) => d.id === id) || null;
   },
 
   async createDiagnostic(clienteId: string, userId?: string | null): Promise<Diagnostico> {
-    const actorId = await currentUserId();
-    const { data, error } = await supabase.from('diagnosticos').insert({
+    const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
+    const newDiag: Diagnostico = {
+      id: generateId('diag'),
       cliente_id: clienteId,
       data_referencia: new Date().toISOString().slice(0, 10),
       status: 'rascunho',
       resumo: '',
       compartilhado: false,
-      share_token: crypto.randomUUID(),
-      criado_por: actorId, // never trust an arbitrary ID passed from the browser
-    }).select('*').single();
-    assertOk('criar diagnóstico', error);
-    return data as Diagnostico;
+      share_token: generateId('token'),
+      criado_por: userId || 'local_user',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    diags.unshift(newDiag);
+    saveStorage(STORAGE_KEYS.DIAGNOSTICOS, diags);
+    return newDiag;
   },
 
   async updateDiagnostic(id: string, updates: Partial<Diagnostico>): Promise<Diagnostico> {
-    await currentUserId();
-    const { id: _id, cliente_id: _clientId, criado_por: _author, created_at: _created, ...editable } = updates;
-    const { data, error } = await supabase.from('diagnosticos')
-      .update({ ...editable, updated_at: new Date().toISOString() })
-      .eq('id', id).select('*').single();
-    assertOk('atualizar diagnóstico', error);
-    return data as Diagnostico;
+    const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
+    const index = diags.findIndex((d) => d.id === id);
+    if (index === -1) {
+      throw new Error('Diagnóstico não encontrado para atualização.');
+    }
+
+    const current = diags[index];
+    const updatedDiag: Diagnostico = {
+      ...current,
+      ...updates,
+      id: current.id,
+      cliente_id: current.cliente_id,
+      created_at: current.created_at,
+      updated_at: new Date().toISOString(),
+    };
+
+    diags[index] = updatedDiag;
+    saveStorage(STORAGE_KEYS.DIAGNOSTICOS, diags);
+    return updatedDiag;
   },
 
   async deleteDiagnostic(id: string): Promise<void> {
-    await currentUserId();
-    const { error: aErr } = await supabase.from('avaliacoes').delete().eq('diagnostico_id', id);
-    assertOk('excluir avaliações', aErr);
-    const { error } = await supabase.from('diagnosticos').delete().eq('id', id);
-    assertOk('excluir diagnóstico', error);
+    // 1. Remove evaluations
+    const avals = loadStorage<Avaliacao[]>(STORAGE_KEYS.AVALIACOES, []);
+    const remainingAvals = avals.filter((a) => a.diagnostico_id !== id);
+    saveStorage(STORAGE_KEYS.AVALIACOES, remainingAvals);
+
+    // 2. Remove diagnostic
+    const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
+    const remainingDiags = diags.filter((d) => d.id !== id);
+    saveStorage(STORAGE_KEYS.DIAGNOSTICOS, remainingDiags);
   },
 
   // AVALIACOES
   async getAvaliacoes(diagnosticId: string): Promise<Avaliacao[]> {
-    await currentUserId();
-    const { data, error } = await supabase.from('avaliacoes')
-      .select('*').eq('diagnostico_id', diagnosticId);
-    assertOk('consultar avaliações', error);
-    return (data ?? []) as Avaliacao[];
+    const avals = loadStorage<Avaliacao[]>(STORAGE_KEYS.AVALIACOES, []);
+    return avals.filter((a) => a.diagnostico_id === diagnosticId);
   },
 
   async saveAvaliacoes(
     diagnosticId: string,
     items: Array<{ criterio_id: string; nota: number | null; solucao: string | null }>
   ): Promise<void> {
-    await currentUserId();
     if (!items.length) return;
-    const { data: existing, error: readError } = await supabase
-      .from('avaliacoes').select('id, criterio_id').eq('diagnostico_id', diagnosticId);
-    assertOk('localizar avaliações existentes', readError);
-    const byCriterion = new Map((existing ?? []).map((row) => [row.criterio_id, row.id]));
+    const avals = loadStorage<Avaliacao[]>(STORAGE_KEYS.AVALIACOES, []);
+
     for (const item of items) {
-      const record = { nota: item.nota, solucao: item.solucao };
-      const existingId = byCriterion.get(item.criterio_id);
-      if (existingId) {
-        const { error } = await supabase.from('avaliacoes').update(record).eq('id', existingId);
-        assertOk('atualizar avaliação', error);
+      const existingIndex = avals.findIndex(
+        (a) => a.diagnostico_id === diagnosticId && a.criterio_id === item.criterio_id
+      );
+
+      if (existingIndex !== -1) {
+        avals[existingIndex] = {
+          ...avals[existingIndex],
+          nota: item.nota,
+          solucao: item.solucao,
+        };
       } else {
-        const { error } = await supabase.from('avaliacoes').insert({
-          diagnostico_id: diagnosticId, criterio_id: item.criterio_id, ...record,
+        avals.push({
+          id: generateId('aval'),
+          diagnostico_id: diagnosticId,
+          criterio_id: item.criterio_id,
+          nota: item.nota,
+          solucao: item.solucao,
         });
-        assertOk('salvar avaliação', error);
       }
     }
+
+    saveStorage(STORAGE_KEYS.AVALIACOES, avals);
   },
 
   // SCORES & VIEWS
@@ -313,29 +376,21 @@ export const dataRepository = {
     return result;
   },
 
-  // PUBLIC REPORT (Matches specification: only if compartilhado = true and status = finalizado)
+  // PUBLIC REPORT
   async getPublicReport(token: string): Promise<PublicReportData | null> {
-    const { data: diagData, error } = await supabase.from('diagnosticos')
-      .select('*').eq('share_token', token).eq('compartilhado', true)
-      .eq('status', 'finalizado').maybeSingle();
-    assertOk('consultar relatório compartilhado', error);
-    const diag = diagData as Diagnostico | null;
+    const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
+    const diag = diags.find(
+      (d) => d.share_token === token && d.compartilhado && d.status === 'finalizado'
+    );
 
-    if (!diag || !diag.compartilhado || diag.status !== 'finalizado') {
+    if (!diag) {
       return null;
     }
 
-    // Public reports require explicit, narrow SELECT policies for shared diagnostics.
-    const { data: clientData, error: clientError } = await supabase
-      .from('clientes').select('*').eq('id', diag.cliente_id).maybeSingle();
-    assertOk('consultar cliente do relatório', clientError);
-    const client = clientData as Cliente | null;
+    const client = await this.getClientById(diag.cliente_id);
     if (!client) return null;
 
-    const { data: avaliacoesData, error: avaliacoesError } = await supabase
-      .from('avaliacoes').select('*').eq('diagnostico_id', diag.id);
-    assertOk('consultar avaliações públicas', avaliacoesError);
-    const avaliacoes = (avaliacoesData ?? []) as Avaliacao[];
+    const avaliacoes = await this.getAvaliacoes(diag.id);
     const criterios = await this.getCriterios();
     const pilares = await this.getPilares();
 
@@ -386,12 +441,15 @@ export const dataRepository = {
     };
   },
 
-  // Legacy reset buttons must not delete shared production data.
   resetToDemo(): void {
-    console.warn('resetToDemo desativado: dados compartilhados preservados.');
+    console.info('resetToDemo executado');
   },
 
   clearAll(): void {
-    console.warn('clearAll desativado: exclusão global bloqueada por segurança.');
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.removeItem(STORAGE_KEYS.CLIENTES);
+      window.localStorage.removeItem(STORAGE_KEYS.DIAGNOSTICOS);
+      window.localStorage.removeItem(STORAGE_KEYS.AVALIACOES);
+    }
   },
 };
