@@ -13,6 +13,7 @@ import {
   AlertTriangle,
   RefreshCw,
   X,
+  Trash2,
 } from 'lucide-react';
 
 interface ClientWithLatestScore extends Cliente {
@@ -29,7 +30,6 @@ export const ClientsPage: React.FC = () => {
   // New Client Form State
   const [formNome, setFormNome] = useState('');
   const [formInstagram, setFormInstagram] = useState('');
-  const [formSegmento, setFormSegmento] = useState('');
   const [formCidade, setFormCidade] = useState('');
   const [formWhatsapp, setFormWhatsapp] = useState('');
   const [formSite, setFormSite] = useState('');
@@ -68,6 +68,22 @@ export const ClientsPage: React.FC = () => {
     });
   }, [clients, searchQuery]);
 
+  const handleDeleteClient = async (id: string, name: string) => {
+    if (
+      window.confirm(
+        `Tem certeza que deseja excluir o cliente "${name}" e todos os seus diagnósticos? Esta ação é irreversível.`
+      )
+    ) {
+      try {
+        await dataRepository.deleteClient(id);
+        await fetchClientsAndScores();
+      } catch (err) {
+        console.error(err);
+        alert('Erro ao excluir cliente.');
+      }
+    }
+  };
+
   const handleCreateClient = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
@@ -87,7 +103,7 @@ export const ClientsPage: React.FC = () => {
       const { client: createdClient } = await dataRepository.createClient({
         nome: formNome.trim(),
         instagram: cleanInsta || null,
-        segmento: formSegmento.trim() || null,
+        segmento: 'Splash',
         cidade: formCidade.trim() || null,
         whatsapp: formWhatsapp.trim() || null,
         site: formSite.trim() || null,
@@ -98,7 +114,6 @@ export const ClientsPage: React.FC = () => {
       setIsModalOpen(false);
       setFormNome('');
       setFormInstagram('');
-      setFormSegmento('');
       setFormCidade('');
       setFormWhatsapp('');
       setFormSite('');
@@ -238,24 +253,36 @@ export const ClientsPage: React.FC = () => {
                 className="group block bg-white dark:bg-[#161d2e] p-5 rounded-xl border border-[#dde2ec] dark:border-slate-800 hover:border-[#2f55d4] dark:hover:border-[#6f8cff] transition-all shadow-xs hover:shadow-md relative"
               >
                 <div className="flex items-start justify-between gap-3 mb-3">
-                  <div className="min-w-0 pr-2">
+                  <div className="min-w-0 pr-2 flex-1">
                     <h3 className="font-heading text-base font-bold text-[#131a2b] dark:text-[#e8ecf5] group-hover:text-[#2f55d4] transition-colors truncate">
                       {client.nome}
                     </h3>
-                    {client.segmento && (
-                      <span className="text-xs text-[#5d6680] dark:text-slate-400 block mt-0.5 truncate">
-                        {client.segmento}
-                      </span>
-                    )}
+                    <span className="text-xs text-[#5d6680] dark:text-slate-400 block mt-0.5 truncate">
+                      {client.segmento || 'Splash'}
+                    </span>
                   </div>
 
-                  {diag && diag.media_geral !== null ? (
-                    <ScoreBadge media={diag.media_geral} faixa={diag.faixa_geral} size="sm" />
-                  ) : (
-                    <span className="text-[11px] text-slate-400 dark:text-slate-500 font-mono shrink-0">
-                      Sem diagnóstico
-                    </span>
-                  )}
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {diag && diag.media_geral !== null ? (
+                      <ScoreBadge media={diag.media_geral} faixa={diag.faixa_geral} size="sm" />
+                    ) : (
+                      <span className="text-[11px] text-slate-400 dark:text-slate-500 font-mono">
+                        Sem diagnóstico
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleDeleteClient(client.id, client.nome);
+                      }}
+                      title="Excluir cliente"
+                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
 
                 {/* Info row */}
@@ -316,14 +343,14 @@ export const ClientsPage: React.FC = () => {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Nome do cliente / empresa <span className="text-rose-500">*</span>
+                  Nome do cliente / unidade <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="text"
                   required
                   value={formNome}
                   onChange={(e) => setFormNome(e.target.value)}
-                  placeholder="Ex: Ótica Visual, Padaria Central"
+                  placeholder="Ex: Splash Cidade"
                   className="w-full px-3.5 py-2.5 text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/60 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-[#2f55d4]"
                 />
               </div>
@@ -349,21 +376,6 @@ export const ClientsPage: React.FC = () => {
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Segmento
-                  </label>
-                  <input
-                    type="text"
-                    value={formSegmento}
-                    onChange={(e) => setFormSegmento(e.target.value)}
-                    placeholder="Ex: Moda, Gastronomia, Saúde"
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/60 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-[#2f55d4]"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                     Cidade / UF
                   </label>
                   <input
@@ -374,7 +386,9 @@ export const ClientsPage: React.FC = () => {
                     className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/60 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-[#2f55d4]"
                   />
                 </div>
+              </div>
 
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                     WhatsApp Comercial
@@ -387,9 +401,7 @@ export const ClientsPage: React.FC = () => {
                     className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/60 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-[#2f55d4]"
                   />
                 </div>
-              </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                     Site ou Linktree
@@ -402,19 +414,19 @@ export const ClientsPage: React.FC = () => {
                     className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/60 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-[#2f55d4]"
                   />
                 </div>
+              </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Responsável na Agência
-                  </label>
-                  <input
-                    type="text"
-                    value={formResponsavel}
-                    onChange={(e) => setFormResponsavel(e.target.value)}
-                    placeholder="Nome do analista"
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/60 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-[#2f55d4]"
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Responsável na Agência
+                </label>
+                <input
+                  type="text"
+                  value={formResponsavel}
+                  onChange={(e) => setFormResponsavel(e.target.value)}
+                  placeholder="Nome do analista"
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/60 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-[#2f55d4]"
+                />
               </div>
 
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">

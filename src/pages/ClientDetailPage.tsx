@@ -37,7 +37,6 @@ export const ClientDetailPage: React.FC<ClientDetailPageProps> = ({ clientId }) 
   const [isEditingClient, setIsEditingClient] = useState(false);
   const [editNome, setEditNome] = useState('');
   const [editInstagram, setEditInstagram] = useState('');
-  const [editSegmento, setEditSegmento] = useState('');
   const [editCidade, setEditCidade] = useState('');
   const [editWhatsapp, setEditWhatsapp] = useState('');
   const [editSite, setEditSite] = useState('');
@@ -46,6 +45,7 @@ export const ClientDetailPage: React.FC<ClientDetailPageProps> = ({ clientId }) 
 
   // New Diagnostic State
   const [creatingDiag, setCreatingDiag] = useState(false);
+  const [deletingClient, setDeletingClient] = useState(false);
 
   const fetchClientData = useCallback(async () => {
     setLoading(true);
@@ -60,7 +60,6 @@ export const ClientDetailPage: React.FC<ClientDetailPageProps> = ({ clientId }) 
 
       setEditNome(clientData.nome || '');
       setEditInstagram(clientData.instagram || '');
-      setEditSegmento(clientData.segmento || '');
       setEditCidade(clientData.cidade || '');
       setEditWhatsapp(clientData.whatsapp || '');
       setEditSite(clientData.site || '');
@@ -92,7 +91,7 @@ export const ClientDetailPage: React.FC<ClientDetailPageProps> = ({ clientId }) 
       const updated = await dataRepository.updateClient(clientId, {
         nome: editNome.trim(),
         instagram: cleanInsta || null,
-        segmento: editSegmento.trim() || null,
+        segmento: 'Splash',
         cidade: editCidade.trim() || null,
         whatsapp: editWhatsapp.trim() || null,
         site: editSite.trim() || null,
@@ -106,6 +105,25 @@ export const ClientDetailPage: React.FC<ClientDetailPageProps> = ({ clientId }) 
       alert('Erro ao atualizar dados do cliente.');
     } finally {
       setSavingClient(false);
+    }
+  };
+
+  const handleDeleteClient = async () => {
+    if (!client) return;
+    if (
+      window.confirm(
+        `Tem certeza que deseja excluir permanentemente o cliente "${client.nome}" e todo o histórico de diagnósticos? Esta ação não pode ser desfeita.`
+      )
+    ) {
+      try {
+        setDeletingClient(true);
+        await dataRepository.deleteClient(client.id);
+        window.location.hash = '#/clientes';
+      } catch (err) {
+        console.error(err);
+        alert('Erro ao excluir cliente.');
+        setDeletingClient(false);
+      }
     }
   };
 
@@ -201,15 +219,28 @@ export const ClientDetailPage: React.FC<ClientDetailPageProps> = ({ clientId }) 
             )}
           </div>
 
-          <button
-            type="button"
-            disabled={creatingDiag}
-            onClick={handleCreateDiagnostic}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-heading text-xs sm:text-sm font-bold text-white bg-[#2f55d4] hover:bg-[#2544ad] transition-all shadow-xs cursor-pointer disabled:opacity-50"
-          >
-            <Plus className="w-4 h-4" />
-            <span>{creatingDiag ? 'Criando...' : 'Novo Diagnóstico'}</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={deletingClient}
+              onClick={handleDeleteClient}
+              title="Excluir este cliente e todo o histórico"
+              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl font-heading text-xs sm:text-sm font-semibold text-rose-600 dark:text-rose-400 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/30 dark:hover:bg-rose-950/60 border border-rose-200 dark:border-rose-900/60 transition-all cursor-pointer disabled:opacity-50"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>{deletingClient ? 'Excluindo...' : 'Excluir Cliente'}</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={creatingDiag}
+              onClick={handleCreateDiagnostic}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-heading text-xs sm:text-sm font-bold text-white bg-[#2f55d4] hover:bg-[#2544ad] transition-all shadow-xs cursor-pointer disabled:opacity-50"
+            >
+              <Plus className="w-4 h-4" />
+              <span>{creatingDiag ? 'Criando...' : 'Novo Diagnóstico'}</span>
+            </button>
+          </div>
         </div>
 
         {/* Client Meta Info Grid */}
@@ -454,20 +485,6 @@ export const ClientDetailPage: React.FC<ClientDetailPageProps> = ({ clientId }) 
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Segmento
-                  </label>
-                  <input
-                    type="text"
-                    value={editSegmento}
-                    onChange={(e) => setEditSegmento(e.target.value)}
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-[#2f55d4]"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                     Cidade / UF
                   </label>
                   <input
@@ -477,7 +494,9 @@ export const ClientDetailPage: React.FC<ClientDetailPageProps> = ({ clientId }) 
                     className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-[#2f55d4]"
                   />
                 </div>
+              </div>
 
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                     WhatsApp Comercial
@@ -489,9 +508,7 @@ export const ClientDetailPage: React.FC<ClientDetailPageProps> = ({ clientId }) 
                     className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-[#2f55d4]"
                   />
                 </div>
-              </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                     Site ou Linktree
@@ -503,18 +520,18 @@ export const ClientDetailPage: React.FC<ClientDetailPageProps> = ({ clientId }) 
                     className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-[#2f55d4]"
                   />
                 </div>
+              </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Responsável na Agência
-                  </label>
-                  <input
-                    type="text"
-                    value={editResponsavel}
-                    onChange={(e) => setEditResponsavel(e.target.value)}
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-[#2f55d4]"
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Responsável na Agência
+                </label>
+                <input
+                  type="text"
+                  value={editResponsavel}
+                  onChange={(e) => setEditResponsavel(e.target.value)}
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-[#2f55d4]"
+                />
               </div>
 
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
