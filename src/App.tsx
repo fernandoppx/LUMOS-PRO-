@@ -1,6 +1,9 @@
-
 import React, { useState, useEffect } from 'react';
+import type { Session } from '@supabase/supabase-js';
+
+import { supabase } from './lib/supabase';
 import { Header } from './components/Header';
+import { LoginPage } from './pages/LoginPage';
 import { ClientsPage } from './pages/ClientsPage';
 import { ClientDetailPage } from './pages/ClientDetailPage';
 import { DiagnosticEditorPage } from './pages/DiagnosticEditorPage';
@@ -8,11 +11,38 @@ import { DiagnosticDashboardPage } from './pages/DiagnosticDashboardPage';
 import { PublicReportPage } from './pages/PublicReportPage';
 
 export default function App() {
-  const [currentHash, setCurrentHash] = useState<string>(
+  const [session, setSession] = useState<Session | null>(null);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  const [currentHash, setCurrentHash] = useState(
     window.location.hash || '#/clientes'
   );
 
   useEffect(() => {
+    let mounted = true;
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (mounted) {
+        setSession(data.session);
+        setCheckingSession(false);
+      }
+    }).catch(() => {
+      if (mounted) setCheckingSession(false);
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (_event, newSession) => {
+        setSession(newSession);
+        setCheckingSession(false);
+      }
+    );
+
+    const handleHashChange = () => {
+      setCurrentHash(window.location.hash || '#/clientes');
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+
     if (
       !window.location.hash ||
       window.location.hash === '#/' ||
@@ -21,58 +51,57 @@ export default function App() {
       window.location.hash = '#/clientes';
     }
 
-    const handleHashChange = () => {
-      const h = window.location.hash || '#/clientes';
-      setCurrentHash(h);
-    };
-
-    window.addEventListener('hashchange', handleHashChange);
-
     return () => {
+      mounted = false;
+      listener.subscription.unsubscribe();
       window.removeEventListener('hashchange', handleHashChange);
     };
   }, []);
 
-  // Rota de relatório compartilhado
-  if (currentHash.startsWith('#/r/')) {
-    const token = currentHash
-      .replace('#/r/', '')
-      .split('?')[0]
-      .split('/')[0];
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setSession(null);
+    window.location.hash = '#/clientes';
+  };
 
-    return <PublicReportPage token={token} />;
+  if (checkingSession) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#0e1320] text-white">
+        Verificando acesso...
+      </div>
+    );
   }
 
-  // Rotas internas
+  // Login obrigatório para acessar o sistema
+  if (!session) {
+    return (
+      <LoginPage
+        onSuccess={() => {
+          supabase.auth.getSession().then(({ data }) => {
+            setSession(data.session);
+          });
+        }}
+      />
+    );
+  }
+
   const renderCurrentView = () => {
     if (currentHash.startsWith('#/cliente/')) {
-      const clientId = currentHash
-        .replace('#/cliente/', '')
-        .split('/')[0];
-
+      const clientId = currentHash.replace('#/cliente/', '').split('/')[0];
       return <ClientDetailPage clientId={clientId} />;
     }
 
     if (currentHash.startsWith('#/editar/')) {
-      const diagId = currentHash
-        .replace('#/editar/', '')
-        .split('/')[0];
-
+      const diagId = currentHash.replace('#/editar/', '').split('/')[0];
       return <DiagnosticEditorPage diagnosticId={diagId} />;
     }
 
     if (currentHash.startsWith('#/dash/')) {
-      const parts = currentHash
-        .replace('#/dash/', '')
-        .split('/');
-
-      const diagId = parts[0];
-      const pilarSlug = parts[1];
-
+      const parts = currentHash.replace('#/dash/', '').split('/');
       return (
         <DiagnosticDashboardPage
-          diagnosticId={diagId}
-          initialPilarSlug={pilarSlug}
+          diagnosticId={parts[0]}
+          initialPilarSlug={parts[1]}
         />
       );
     }
