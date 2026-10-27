@@ -4,7 +4,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import { app, issueTeamSessionCookie } from './src/server/app';
+import { app } from './src/server/app';
 
 dotenv.config();
 
@@ -16,18 +16,6 @@ const isVercel = process.env.VERCEL === '1';
 
 // Mantém a emissão de cookie existente.
 // A autorização real deve ser verificada no backend.
-app.use((req, res, next) => {
-  if (
-    req.method === 'GET' &&
-    !req.path.startsWith('/api') &&
-    !req.path.includes('.')
-  ) {
-    issueTeamSessionCookie(res);
-  }
-
-  next();
-});
-
 // Entrada Express reconhecida pela Vercel
 export default app;
 
