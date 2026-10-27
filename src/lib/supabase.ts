@@ -1,19 +1,25 @@
 import { createClient } from '@supabase/supabase-js';
 
-export const SUPABASE_URL =
+const supabaseUrl =
   'https://jjbfrrlsoelequgtwgmz.supabase.co';
 
-export const SUPABASE_ANON_KEY =
+const supabaseKey =
   import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
+if (!supabaseKey) {
+  throw new Error(
+    'Chave pública do Supabase não configurada.'
+  );
+}
+
 export const supabase = createClient(
-  SUPABASE_URL,
-  SUPABASE_ANON_KEY,
+  supabaseUrl,
+  supabaseKey,
   {
     auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
     },
   }
 );
