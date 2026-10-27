@@ -4,6 +4,8 @@ import {
   ShieldCheck,
   Mail,
   Lock,
+  Eye,
+  EyeOff,
   ArrowRight,
   AlertCircle
 } from 'lucide-react';
@@ -18,16 +20,49 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   const [isRegister, setIsRegister] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] =
     useState<string | null>(null);
+
+  // Análise visual de força da senha
+  const passwordRules = [
+    password.length >= 8,
+    /[a-z]/.test(password) && /[A-Z]/.test(password),
+    /\d/.test(password),
+    /[^A-Za-z0-9]/.test(password)
+  ];
+
+  const passwordScore = passwordRules.filter(Boolean).length;
+
+  const passwordStrength =
+    passwordScore <= 1
+      ? 'Fraca'
+      : passwordScore <= 3
+        ? 'Média'
+        : 'Forte';
+
+  const strengthColor =
+    passwordScore <= 1
+      ? '#ef4444'
+      : passwordScore <= 3
+        ? '#f59e0b'
+        : '#10b981';
 
   const handleSubmit = async (
     e: React.FormEvent
   ) => {
     e.preventDefault();
-    setLoading(true);
     setErrorMessage(null);
+
+    if (isRegister && passwordScore < 4) {
+      setErrorMessage(
+        'Para criar sua conta, utilize pelo menos 8 caracteres, letras maiúsculas e minúsculas, números e símbolos.'
+      );
+      return;
+    }
+
+    setLoading(true);
 
     try {
       const credentials = {
@@ -43,7 +78,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
         if (!data.session) {
           setErrorMessage(
-            'Conta criada. Verifique seu e-mail para confirmar o cadastro.'
+            'Cadastro recebido. Verifique se é necessário confirmar seu e-mail.'
           );
           return;
         }
@@ -66,11 +101,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
         ? error.message
         : '';
 
-      if (message.includes('already registered')) {
-        setErrorMessage(
-          'Este e-mail já está cadastrado. Utilize Entrar.'
-        );
-      } else if (message.includes('rate limit')) {
+      if (message.toLowerCase().includes('rate limit')) {
         setErrorMessage(
           'Limite temporário de tentativas atingido. Tente novamente mais tarde.'
         );
@@ -100,6 +131,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
           </p>
         </div>
 
+        {/* Alternância entre login e cadastro */}
         <div className="flex bg-slate-100 dark:bg-slate-800 rounded-xl p-1 mb-6">
           <button
             type="button"
@@ -110,7 +142,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
             className={`flex-1 py-2.5 text-sm font-semibold rounded-lg ${
               !isRegister
                 ? 'bg-white dark:bg-slate-700 text-[#2f55d4] shadow-sm'
-                : 'text-slate-500'
+                : 'text-slate-500 dark:text-slate-400'
             }`}
           >
             Entrar
@@ -125,19 +157,18 @@ export const LoginPage: React.FC<LoginPageProps> = ({
             className={`flex-1 py-2.5 text-sm font-semibold rounded-lg ${
               isRegister
                 ? 'bg-white dark:bg-slate-700 text-[#2f55d4] shadow-sm'
-                : 'text-slate-500'
+                : 'text-slate-500 dark:text-slate-400'
             }`}
           >
             Criar Conta
           </button>
         </div>
 
-        <form
-          onSubmit={handleSubmit}
-          className="space-y-4"
-        >
+        <form onSubmit={handleSubmit} className="space-y-4">
+
+          {/* E-mail */}
           <div>
-            <label className="block text-xs font-semibold mb-1.5 dark:text-white">
+            <label className="block text-xs font-semibold mb-1.5 text-slate-700 dark:text-slate-300">
               E-mail
             </label>
 
@@ -148,7 +179,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 type="email"
                 required
                 value={email}
-                onChange={e => setEmail(e.target.value)}
+                onChange={(e) => setEmail(e.target.value)}
                 placeholder="seu.email@exemplo.com"
                 autoComplete="email"
                 className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
@@ -156,8 +187,9 @@ export const LoginPage: React.FC<LoginPageProps> = ({
             </div>
           </div>
 
+          {/* Senha com máscara e mostrar/ocultar */}
           <div>
-            <label className="block text-xs font-semibold mb-1.5 dark:text-white">
+            <label className="block text-xs font-semibold mb-1.5 text-slate-700 dark:text-slate-300">
               Senha
             </label>
 
@@ -165,21 +197,86 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               <Lock className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
 
               <input
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 required
-                minLength={6}
+                minLength={isRegister ? 8 : 6}
                 value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="Mínimo de 6 caracteres"
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={
+                  isRegister
+                    ? 'Crie uma senha forte'
+                    : 'Digite sua senha'
+                }
                 autoComplete={
                   isRegister
                     ? 'new-password'
                     : 'current-password'
                 }
-                className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                className="w-full pl-9 pr-11 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
               />
+
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                aria-label={
+                  showPassword
+                    ? 'Ocultar senha'
+                    : 'Mostrar senha'
+                }
+                aria-pressed={showPassword}
+                className="absolute right-3 top-3 text-slate-400 hover:text-[#2f55d4]"
+              >
+                {showPassword
+                  ? <EyeOff className="w-4 h-4" />
+                  : <Eye className="w-4 h-4" />}
+              </button>
             </div>
           </div>
+
+          {/* Indicador de força apenas no cadastro */}
+          {isRegister && (
+            <div className="space-y-2">
+              <div className="flex gap-1">
+                {[1, 2, 3, 4].map((level) => (
+                  <div
+                    key={level}
+                    className="h-1.5 flex-1 rounded-full transition-colors"
+                    style={{
+                      backgroundColor:
+                        password &&
+                        level <= passwordScore
+                          ? strengthColor
+                          : '#d5dbe5'
+                    }}
+                  />
+                ))}
+              </div>
+
+              <div className="flex justify-between items-center">
+                <span className="text-xs text-slate-500">
+                  Força da senha
+                </span>
+
+                <span
+                  className="text-xs font-bold"
+                  style={{
+                    color: password
+                      ? strengthColor
+                      : '#94a3b8'
+                  }}
+                >
+                  {password
+                    ? passwordStrength
+                    : 'Digite uma senha'}
+                </span>
+              </div>
+
+              <p className="text-xs text-slate-400">
+                Use no mínimo 8 caracteres, letras maiúsculas
+                e minúsculas, números e símbolos.
+              </p>
+            </div>
+          )}
 
           {errorMessage && (
             <div
@@ -200,8 +297,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               ? 'Aguarde...'
               : isRegister
                 ? 'Criar Conta e Entrar'
-                : 'Entrar no Sistema'
-            }
+                : 'Entrar no Sistema'}
 
             {!loading && (
               <ArrowRight className="w-4 h-4" />
