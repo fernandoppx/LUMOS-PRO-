@@ -3,56 +3,18 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import {
-  rateLimiter,
-  requireTeamAccess,
-  issueTeamSessionCookie,
-} from './src/server/middleware/security';
-import { clientesRouter } from './src/server/routes/clientes';
-import { diagnosticosRouter } from './src/server/routes/diagnosticos';
+import { app, issueTeamSessionCookie } from './src/server/app';
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
-
-// Basic security response headers
-app.use((_req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-  next();
-});
-
-// JSON body parser with payload limits
-app.use(express.json({ limit: '2mb' }));
-
-// Apply IP rate limiting to API routes
-app.use('/api', rateLimiter);
-
-/**
- * Health check endpoint (public ping)
- */
-app.get('/api/health', (_req, res) => {
-  res.json({
-    status: 'ok',
-    service: 'Lumos Pro Backend',
-    timestamp: new Date().toISOString(),
-  });
-});
-
-/**
- * API Routes protected by Team & Gateway Access Middleware
- * Protects GET, POST, PUT, DELETE
- */
-app.use('/api/clientes', requireTeamAccess, clientesRouter);
-app.use('/api/diagnosticos', requireTeamAccess, diagnosticosRouter);
 
 /**
  * Vite integration in development or static serving in production.
- * Issues HttpOnly session cookie on initial page load for legitimate app visitors.
+ * Preserves the exact WebSocket server binding on port 3000.
  */
 async function startServer() {
   const httpServer = http.createServer(app);

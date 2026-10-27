@@ -147,10 +147,11 @@ export const ClientsPage: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+
           <button
             type="button"
             onClick={() => setIsModalOpen(true)}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-heading text-xs sm:text-sm font-bold text-white bg-[#2f55d4] hover:bg-[#2544ad] transition-all shadow-xs cursor-pointer whitespace-nowrap"
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl font-heading text-xs sm:text-sm font-bold text-white bg-[#2f55d4] hover:bg-[#2544ad] transition-all shadow-xs cursor-pointer whitespace-nowrap"
           >
             <Plus className="w-4 h-4" />
             <span>Novo Cliente</span>

@@ -5,8 +5,14 @@ import { ClientDetailPage } from './pages/ClientDetailPage';
 import { DiagnosticEditorPage } from './pages/DiagnosticEditorPage';
 import { DiagnosticDashboardPage } from './pages/DiagnosticDashboardPage';
 import { PublicReportPage } from './pages/PublicReportPage';
+import { AuthPage } from './pages/AuthPage';
+import { AuthUser, authService } from './lib/auth';
 
 export default function App() {
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() =>
+    authService.getCurrentUser()
+  );
+
   const [currentHash, setCurrentHash] = useState<string>(
     window.location.hash || '#/clientes'
   );
@@ -21,17 +27,31 @@ export default function App() {
       setCurrentHash(h);
     };
 
+    const handleAuthChange = () => {
+      setCurrentUser(authService.getCurrentUser());
+    };
+
     window.addEventListener('hashchange', handleHashChange);
-    return () => window.removeEventListener('hashchange', handleHashChange);
+    window.addEventListener('lumos_auth_change', handleAuthChange);
+
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange);
+      window.removeEventListener('lumos_auth_change', handleAuthChange);
+    };
   }, []);
 
-  // 1. PUBLIC ROUTE: #/r/:token (No header, public client view)
+  // 1. PUBLIC ROUTE: #/r/:token (Public client diagnostic report, no login required)
   if (currentHash.startsWith('#/r/')) {
     const token = currentHash.replace('#/r/', '').split('?')[0].split('/')[0];
     return <PublicReportPage token={token} />;
   }
 
-  // 2. INTERNAL ROUTES
+  // 2. AUTHENTICATION GATE: Require login for all internal dashboard and client pages
+  if (!currentUser) {
+    return <AuthPage onSuccess={() => setCurrentUser(authService.getCurrentUser())} />;
+  }
+
+  // 3. INTERNAL PROTECTED ROUTES
   const renderCurrentView = () => {
     // #/cliente/:id
     if (currentHash.startsWith('#/cliente/')) {
@@ -59,7 +79,11 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#f3f5f9] dark:bg-[#0e1320] text-[#131a2b] dark:text-[#e8ecf5] flex flex-col font-sans transition-colors">
-      <Header currentPath={currentHash} />
+      <Header
+        currentPath={currentHash}
+        user={currentUser}
+        onLogout={() => authService.logout()}
+      />
       <main className="flex-1">{renderCurrentView()}</main>
     </div>
   );

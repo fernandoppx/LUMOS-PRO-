@@ -53,7 +53,7 @@ export const ClientDetailPage: React.FC<ClientDetailPageProps> = ({ clientId }) 
     try {
       const clientData = await dataRepository.getClientById(clientId);
       if (!clientData) {
-        setErrorMsg('Cliente não localizado.');
+        setErrorMsg('Cliente não localizado no banco de dados.');
         return;
       }
       setClient(clientData);
@@ -69,7 +69,11 @@ export const ClientDetailPage: React.FC<ClientDetailPageProps> = ({ clientId }) 
       setDiagnostics(diagScoresList);
     } catch (err: unknown) {
       console.error(err);
-      setErrorMsg('Erro ao carregar dados do cliente.');
+      if (err instanceof Error) {
+        setErrorMsg(err.message);
+      } else {
+        setErrorMsg('Erro inesperado ao consultar dados do cliente.');
+      }
     } finally {
       setLoading(false);
     }
@@ -171,13 +175,23 @@ export const ClientDetailPage: React.FC<ClientDetailPageProps> = ({ clientId }) 
           Não foi possível carregar a ficha
         </h2>
         <p className="text-xs text-rose-700 dark:text-rose-300 mb-4">{errorMsg}</p>
-        <a
-          href="#/clientes"
-          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-[#2f55d4] text-white"
-        >
-          <ArrowLeft className="w-3.5 h-3.5" />
-          <span>Voltar para Clientes</span>
-        </a>
+        <div className="flex items-center justify-center gap-3">
+          <button
+            type="button"
+            onClick={() => fetchClientData()}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-[#131a2b] dark:text-white transition-colors cursor-pointer"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Tentar novamente</span>
+          </button>
+          <a
+            href="#/clientes"
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-[#2f55d4] hover:bg-[#2546b8] text-white transition-colors"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span>Voltar para Clientes</span>
+          </a>
+        </div>
       </div>
     );
   }

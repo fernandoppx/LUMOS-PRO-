@@ -1,11 +1,14 @@
 import React from 'react';
-import { Building2, Sparkles, Plus, RefreshCw } from 'lucide-react';
+import { Building2, User as UserIcon, LogOut } from 'lucide-react';
+import { AuthUser, authService } from '../lib/auth';
 
 interface HeaderProps {
   currentPath: string;
+  user?: AuthUser | null;
+  onLogout?: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ currentPath }) => {
+export const Header: React.FC<HeaderProps> = ({ currentPath, user, onLogout }) => {
   const isClientes =
     currentPath.startsWith('#/clientes') ||
     currentPath.startsWith('#/cliente') ||
@@ -13,6 +16,22 @@ export const Header: React.FC<HeaderProps> = ({ currentPath }) => {
     currentPath.startsWith('#/dash') ||
     currentPath === '' ||
     currentPath === '#/';
+
+  const userName =
+    user?.user_metadata?.nome ||
+    user?.user_metadata?.full_name ||
+    user?.email?.split('@')[0] ||
+    'Equipe Lumos';
+
+  const handleLogout = async () => {
+    if (window.confirm('Deseja realmente sair da sua conta?')) {
+      if (onLogout) {
+        onLogout();
+      } else {
+        await authService.logout();
+      }
+    }
+  };
 
   return (
     <header className="sticky top-0 z-40 bg-white/95 dark:bg-[#161d2e]/95 backdrop-blur-md border-b border-[#dde2ec] dark:border-slate-800 transition-colors">
@@ -43,12 +62,30 @@ export const Header: React.FC<HeaderProps> = ({ currentPath }) => {
           </nav>
         </div>
 
-        {/* Zone 3: Agency Tag */}
-        <div className="flex items-center gap-3 shrink-0">
-          <div className="hidden sm:flex items-center gap-2 px-3 py-1 rounded-full bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/60 text-xs text-slate-600 dark:text-slate-300">
+        {/* Zone 3: Agency Tag & User Menu */}
+        <div className="flex items-center gap-2.5 shrink-0">
+          <div className="hidden md:flex items-center gap-2 px-3 py-1 rounded-full bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/60 text-xs text-slate-600 dark:text-slate-300">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span className="font-medium">LUMOS Agency · Online</span>
+            <span className="font-medium">LUMOS Agency</span>
           </div>
+
+          {user && (
+            <div className="flex items-center gap-2 pl-2 border-l border-slate-200 dark:border-slate-800">
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-50 dark:bg-slate-800/60 text-xs text-[#131a2b] dark:text-slate-200">
+                <UserIcon className="w-3.5 h-3.5 text-[#2f55d4]" />
+                <span className="font-semibold max-w-[120px] sm:max-w-[160px] truncate">{userName}</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleLogout}
+                title="Sair da conta"
+                className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-xl transition-colors cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Sair</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </header>

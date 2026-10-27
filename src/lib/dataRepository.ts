@@ -23,6 +23,7 @@ const STORAGE_KEYS = {
   PILARES: 'lumos_pro_pilares',
   CRITERIOS: 'lumos_pro_criterios',
   PENDING_CHANGES: 'lumos_pro_pending_changes',
+  PRE_MIGRATION_BACKUP: 'lumos_pro_pre_migration_backup',
 } as const;
 
 function generateId(prefix = 'id'): string {
@@ -152,45 +153,92 @@ export const dataRepository = {
     return DEFAULT_CRITERIOS;
   },
 
-  // CLIENTES
+  // CLIENTES (Não-destrutivo: preserva clientes locais mesmo se o servidor estiver vazio ou inacessível)
   async getClients(): Promise<Cliente[]> {
+    const localClients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
+
     try {
       const res = await fetch('/api/clientes', { credentials: 'same-origin' });
       if (res.ok) {
         const backendClients: Cliente[] = await res.json();
         if (Array.isArray(backendClients)) {
-          saveStorage(STORAGE_KEYS.CLIENTES, backendClients);
-          return backendClients;
+          // Merge seguro: preserva todos do servidor e mantém qualquer cliente local que ainda não subiu
+          const serverIds = new Set(backendClients.map((c) => c.id));
+          const pendingLocals = localClients.filter((c) => !serverIds.has(c.id)).map((c) => ({
+            ...c,
+            _pendingSync: true,
+          }));
+
+          const merged = [...backendClients, ...pendingLocals];
+          saveStorage(STORAGE_KEYS.CLIENTES, merged);
+          return merged;
         }
       }
     } catch (err) {
-      console.warn('[dataRepository.getClients] Modo contingência offline:', err);
+      console.warn('[dataRepository.getClients] API indisponível, usando cache local seguro:', err);
     }
-    return loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
+
+    return localClients;
   },
 
   async getClientById(id: string): Promise<Cliente | null> {
+    const localClients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
+    const cached = localClients.find((c) => c.id === id);
+
     try {
-      const res = await fetch(`/api/clientes/${encodeURIComponent(id)}`, { credentials: 'same-origin' });
+      const res = await fetch(`/api/clientes/${encodeURIComponent(id)}`, {
+        credentials: 'same-origin',
+      });
+
       if (res.ok) {
         const backendClient: Cliente = await res.json();
         if (backendClient?.id) {
-          const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
-          const index = clients.findIndex((c) => c.id === id);
+          const index = localClients.findIndex((c) => c.id === id);
           if (index !== -1) {
-            clients[index] = backendClient;
+            localClients[index] = backendClient;
           } else {
-            clients.unshift(backendClient);
+            localClients.unshift(backendClient);
           }
-          saveStorage(STORAGE_KEYS.CLIENTES, clients);
+          saveStorage(STORAGE_KEYS.CLIENTES, localClients);
           return backendClient;
         }
       }
-    } catch (err) {
-      console.warn('[dataRepository.getClientById] Modo contingência offline:', err);
+
+      // Tratamento estrito de erros HTTP para diferenciar causas reais
+      if (res.status === 404) {
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const body = await res.json().catch(() => null);
+          if (body?.error === 'Cliente não encontrado.') {
+            // Cliente realmente não existe no Supabase
+            if (cached) return { ...cached, _pendingSync: true };
+            return null;
+          }
+        }
+        // Se a Vercel retornou 404 de rota não encontrada (infraestrutura)
+        if (cached) return { ...cached, _pendingSync: true };
+        throw new Error('Falha no serviço da Vercel: rota de API não encontrada (HTTP 404). O backend pode estar em processo de publicação.');
+      }
+
+      if (res.status === 401 || res.status === 403) {
+        if (cached) return { ...cached, _pendingSync: true };
+        throw new Error('Acesso restrito: este dispositivo não possui permissão para consultar os dados deste cliente (HTTP 403).');
+      }
+
+      if (res.status >= 500) {
+        if (cached) return { ...cached, _pendingSync: true };
+        throw new Error(`Erro interno do servidor ao carregar dados do cliente (HTTP ${res.status}).`);
+      }
+    } catch (err: unknown) {
+      if (cached) {
+        console.info(`[dataRepository.getClientById] Utilizando cache local para o cliente ${id}`);
+        return { ...cached, _pendingSync: true };
+      }
+      if (err instanceof Error) throw err;
+      throw new Error('Falha de conexão com o servidor. Verifique sua conexão com a internet ou se a API está ativa.');
     }
-    const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
-    return clients.find((c) => c.id === id) || null;
+
+    return cached || null;
   },
 
   async createClient(data: Omit<Cliente, 'id' | 'created_at' | 'updated_at'>): Promise<Cliente> {
@@ -202,7 +250,13 @@ export const dataRepository = {
       ativo: data.ativo ?? true,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
+      _pendingSync: true,
     };
+
+    // Sempre garante o cliente gravado no cache local preventivo primeiro
+    const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
+    clients.unshift(localClient);
+    saveStorage(STORAGE_KEYS.CLIENTES, clients);
 
     try {
       const res = await fetch('/api/clientes', {
@@ -214,18 +268,20 @@ export const dataRepository = {
 
       if (res.ok) {
         const saved: Cliente = await res.json();
-        const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
-        clients.unshift(saved);
-        saveStorage(STORAGE_KEYS.CLIENTES, clients);
+        const currentList = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
+        const idx = currentList.findIndex((c) => c.id === newId);
+        if (idx !== -1) {
+          currentList[idx] = { ...saved, _pendingSync: false };
+        } else {
+          currentList.unshift(saved);
+        }
+        saveStorage(STORAGE_KEYS.CLIENTES, currentList);
         return saved;
       }
     } catch (err) {
-      console.warn('[dataRepository.createClient] Erro ao sincronizar com backend:', err);
+      console.warn('[dataRepository.createClient] API indisponível, mantido no cache local como pendente:', err);
     }
 
-    const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
-    clients.unshift(localClient);
-    saveStorage(STORAGE_KEYS.CLIENTES, clients);
     return localClient;
   },
 
@@ -238,7 +294,7 @@ export const dataRepository = {
       nome: updates.nome || 'Cliente',
       segmento: 'Splash',
       ativo: updates.ativo ?? true,
-      created_at: new Date().toISOString(),
+      created_at: index !== -1 ? clients[index].created_at : new Date().toISOString(),
       updated_at: new Date().toISOString(),
       ...updates,
     };
@@ -300,8 +356,11 @@ export const dataRepository = {
     );
   },
 
-  // DIAGNOSTICOS
+  // DIAGNOSTICOS (Não-destrutivo)
   async getDiagnosticsByClient(clienteId: string): Promise<Diagnostico[]> {
+    const localDiags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
+    const localMatching = localDiags.filter((d) => d.cliente_id === clienteId);
+
     try {
       const res = await fetch(`/api/diagnosticos?cliente_id=${encodeURIComponent(clienteId)}`, {
         credentials: 'same-origin',
@@ -309,24 +368,34 @@ export const dataRepository = {
       if (res.ok) {
         const backendDiags: Diagnostico[] = await res.json();
         if (Array.isArray(backendDiags)) {
-          // Reconcilia com o cache local
-          const allDiags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
-          const otherDiags = allDiags.filter((d) => d.cliente_id !== clienteId);
-          saveStorage(STORAGE_KEYS.DIAGNOSTICOS, [...backendDiags, ...otherDiags]);
-          return backendDiags;
+          const serverDiagIds = new Set(backendDiags.map((d) => d.id));
+          const pendingLocals = localMatching.filter((d) => !serverDiagIds.has(d.id)).map((d) => ({
+            ...d,
+            _pendingSync: true,
+          }));
+
+          const mergedThisClient = [...backendDiags, ...pendingLocals];
+          const otherDiags = localDiags.filter((d) => d.cliente_id !== clienteId);
+          saveStorage(STORAGE_KEYS.DIAGNOSTICOS, [...mergedThisClient, ...otherDiags]);
+
+          return mergedThisClient.sort((a, b) =>
+            (b.data_referencia || '').localeCompare(a.data_referencia || '')
+          );
         }
       }
     } catch (err) {
       console.warn('[dataRepository.getDiagnosticsByClient] Contingência offline:', err);
     }
 
-    const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
-    return diags
-      .filter((d) => d.cliente_id === clienteId)
-      .sort((a, b) => (b.data_referencia || '').localeCompare(a.data_referencia || ''));
+    return localMatching.sort((a, b) =>
+      (b.data_referencia || '').localeCompare(a.data_referencia || '')
+    );
   },
 
   async getDiagnosticById(id: string): Promise<Diagnostico | null> {
+    const localDiags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
+    const cached = localDiags.find((d) => d.id === id);
+
     try {
       const res = await fetch(`/api/diagnosticos/${encodeURIComponent(id)}`, {
         credentials: 'same-origin',
@@ -355,12 +424,16 @@ export const dataRepository = {
           return diag;
         }
       }
+
+      if (res.status === 404) {
+        if (cached) return { ...cached, _pendingSync: true };
+        return null;
+      }
     } catch (err) {
       console.warn('[dataRepository.getDiagnosticById] Contingência offline:', err);
     }
 
-    const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
-    return diags.find((d) => d.id === id) || null;
+    return cached || null;
   },
 
   async createDiagnostic(clienteId: string, userId?: string | null): Promise<Diagnostico> {
@@ -376,7 +449,12 @@ export const dataRepository = {
       criado_por: userId || 'lumos_app',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
+      _pendingSync: true,
     };
+
+    const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
+    diags.unshift(localDiag);
+    saveStorage(STORAGE_KEYS.DIAGNOSTICOS, diags);
 
     try {
       const res = await fetch('/api/diagnosticos', {
@@ -393,18 +471,20 @@ export const dataRepository = {
 
       if (res.ok) {
         const created: Diagnostico = await res.json();
-        const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
-        diags.unshift(created);
-        saveStorage(STORAGE_KEYS.DIAGNOSTICOS, diags);
+        const curDiags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
+        const idx = curDiags.findIndex((d) => d.id === newId);
+        if (idx !== -1) {
+          curDiags[idx] = { ...created, _pendingSync: false };
+        } else {
+          curDiags.unshift(created);
+        }
+        saveStorage(STORAGE_KEYS.DIAGNOSTICOS, curDiags);
         return created;
       }
     } catch (err) {
       console.warn('[dataRepository.createDiagnostic] Falha na rede ao criar no backend:', err);
     }
 
-    const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
-    diags.unshift(localDiag);
-    saveStorage(STORAGE_KEYS.DIAGNOSTICOS, diags);
     return localDiag;
   },
 
@@ -442,8 +522,7 @@ export const dataRepository = {
         updatedDiag = await res.json();
       }
     } catch (err) {
-      console.warn('[dataRepository.updateDiagnostic] Erro ou conflito ao atualizar:', err);
-      throw err;
+      console.warn('[dataRepository.updateDiagnostic] Erro ou contingência ao atualizar:', err);
     }
 
     if (index !== -1) {
@@ -465,14 +544,12 @@ export const dataRepository = {
       console.warn('[dataRepository.deleteDiagnostic] Falha de rede ao excluir:', err);
     }
 
-    // 1. Remove evaluations
     const avals = loadStorage<Avaliacao[]>(STORAGE_KEYS.AVALIACOES, []);
     saveStorage(
       STORAGE_KEYS.AVALIACOES,
       avals.filter((a) => a.diagnostico_id !== id)
     );
 
-    // 2. Remove diagnostic
     const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
     saveStorage(
       STORAGE_KEYS.DIAGNOSTICOS,
@@ -482,7 +559,6 @@ export const dataRepository = {
 
   // AVALIACOES
   async getAvaliacoes(diagnosticId: string): Promise<Avaliacao[]> {
-    // 1. Tenta carregar do backend
     try {
       const res = await fetch(`/api/diagnosticos/${encodeURIComponent(diagnosticId)}`, {
         credentials: 'same-origin',
@@ -522,7 +598,7 @@ export const dataRepository = {
 
     const thisSeq = ++currentSaveSeq;
 
-    // Atualiza imediatamente o buffer local
+    // Atualiza imediatamente o buffer local preventivo
     const avals = loadStorage<Avaliacao[]>(STORAGE_KEYS.AVALIACOES, []);
     for (const item of items) {
       const existingIndex = avals.findIndex(
@@ -574,7 +650,7 @@ export const dataRepository = {
         throw new Error(`Erro do servidor (${res.status}) ao gravar avaliações.`);
       }
 
-      // Descarte de resposta fora de ordem (race condition prevention)
+      // Descarte de resposta fora de ordem
       if (thisSeq < lastAckSaveSeq) {
         console.warn(`[dataRepository.saveAvaliacoes] Resposta fora de ordem descartada (seq: ${thisSeq} < ${lastAckSaveSeq})`);
         return { success: true };
@@ -587,6 +663,150 @@ export const dataRepository = {
       console.warn('[dataRepository.saveAvaliacoes] Falha ao persistir no Supabase:', err);
       throw err;
     }
+  },
+
+  // BACKUP E MIGRAÇÃO SEGURA DOS DADOS LOCAIS
+  exportLocalBackup(): string {
+    const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
+    const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
+    const avals = loadStorage<Avaliacao[]>(STORAGE_KEYS.AVALIACOES, []);
+
+    const backupData = {
+      app: 'Lumos Pro',
+      exportedAt: new Date().toISOString(),
+      counts: {
+        clientes: clients.length,
+        diagnosticos: diags.length,
+        avaliacoes: avals.length,
+      },
+      data: {
+        clientes: clients,
+        diagnosticos: diags,
+        avaliacoes: avals,
+      },
+    };
+
+    return JSON.stringify(backupData, null, 2);
+  },
+
+  downloadLocalBackup(): void {
+    if (typeof window === 'undefined') return;
+    const json = this.exportLocalBackup();
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const dateStr = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `lumos-pro-backup-${dateStr}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  },
+
+  getUnsyncedSummary(): { pendingClients: number; pendingDiags: number } {
+    const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
+    const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
+
+    return {
+      pendingClients: clients.filter((c) => c._pendingSync).length,
+      pendingDiags: diags.filter((d) => d._pendingSync).length,
+    };
+  },
+
+  async migrateLocalDataToSupabase(): Promise<{
+    success: boolean;
+    migratedClients: number;
+    migratedDiags: number;
+    errors: string[];
+  }> {
+    // 1. Cria snapshot de segurança obrigatório no localStorage antes de qualquer migração
+    const preBackup = this.exportLocalBackup();
+    saveStorage(STORAGE_KEYS.PRE_MIGRATION_BACKUP, preBackup);
+
+    const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
+    const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
+    const avals = loadStorage<Avaliacao[]>(STORAGE_KEYS.AVALIACOES, []);
+
+    const errors: string[] = [];
+    let migratedClients = 0;
+    let migratedDiags = 0;
+
+    // 2. Consulta IDs existentes no servidor para nunca duplicar
+    let existingClientIds = new Set<string>();
+    try {
+      const res = await fetch('/api/clientes', { credentials: 'same-origin' });
+      if (res.ok) {
+        const list: Cliente[] = await res.json();
+        existingClientIds = new Set(list.map((c) => c.id));
+      }
+    } catch {
+      // continua
+    }
+
+    // 3. Migra Clientes preservando IDs originais
+    for (const client of clients) {
+      if (!existingClientIds.has(client.id)) {
+        try {
+          const res = await fetch('/api/clientes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(client),
+          });
+
+          if (res.ok) {
+            client._pendingSync = false;
+            migratedClients++;
+          } else {
+            errors.push(`Cliente "${client.nome}": erro HTTP ${res.status}`);
+          }
+        } catch (err) {
+          errors.push(`Cliente "${client.nome}": falha de rede`);
+        }
+      } else {
+        client._pendingSync = false;
+      }
+    }
+    saveStorage(STORAGE_KEYS.CLIENTES, clients);
+
+    // 4. Migra Diagnósticos e Avaliações preservando IDs originais
+    for (const diag of diags) {
+      try {
+        const res = await fetch('/api/diagnosticos', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify(diag),
+        });
+
+        if (res.ok) {
+          diag._pendingSync = false;
+          migratedDiags++;
+
+          // Migra avaliações vinculadas a este diagnóstico
+          const diagAvals = avals.filter((a) => a.diagnostico_id === diag.id);
+          if (diagAvals.length > 0) {
+            await fetch(`/api/diagnosticos/${encodeURIComponent(diag.id)}/avaliacoes`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'same-origin',
+              body: JSON.stringify({ items: diagAvals }),
+            });
+          }
+        }
+      } catch (err) {
+        errors.push(`Diagnóstico ID ${diag.id}: erro ao migrar`);
+      }
+    }
+    saveStorage(STORAGE_KEYS.DIAGNOSTICOS, diags);
+
+    return {
+      success: errors.length === 0,
+      migratedClients,
+      migratedDiags,
+      errors,
+    };
   },
 
   // SCORES & VIEWS

@@ -189,12 +189,28 @@ export function isAuthorizedTeamRequest(req: Request): boolean {
     host.includes('127.0.0.1');
 
   if (isDevOrStudio) {
-    // In dev / AI Studio environment, allow if origin/host matches or same-origin request
     const secFetchSite = req.headers['sec-fetch-site'];
     if (secFetchSite === 'same-origin' || secFetchSite === 'same-site' || secFetchSite === 'none') {
       return true;
     }
     if (!secFetchSite && (host.includes('localhost') || host.includes('run.app'))) {
+      return true;
+    }
+  }
+
+  // 6. Vercel Production Environment
+  if (process.env.VERCEL || host.includes('vercel.app')) {
+    const secFetchSite = req.headers['sec-fetch-site'];
+    const origin = req.headers.origin || '';
+    const referer = req.headers.referer || '';
+
+    if (secFetchSite === 'same-origin' || secFetchSite === 'same-site') {
+      return true;
+    }
+    if (origin && (origin.includes('vercel.app') || (host && origin.includes(host)))) {
+      return true;
+    }
+    if (referer && (referer.includes('vercel.app') || (host && referer.includes(host)))) {
       return true;
     }
   }

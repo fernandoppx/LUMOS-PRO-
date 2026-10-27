@@ -48,6 +48,7 @@ export interface Cliente {
   criado_por?: string | null;
   created_at: string;
   updated_at?: string | null;
+  _pendingSync?: boolean;
 }
 
 export type StatusDiagnostico = 'rascunho' | 'finalizado';
@@ -63,6 +64,7 @@ export interface Diagnostico {
   criado_por?: string | null;
   created_at: string;
   updated_at?: string | null;
+  _pendingSync?: boolean;
 }
 
 export interface Avaliacao {
