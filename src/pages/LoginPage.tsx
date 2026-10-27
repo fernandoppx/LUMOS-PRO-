@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { supabase } from '../lib/supabase';
 import {
@@ -16,37 +15,70 @@ interface LoginPageProps {
 export const LoginPage: React.FC<LoginPageProps> = ({
   onSuccess
 }) => {
+  const [isRegister, setIsRegister] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] =
     useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (
+    e: React.FormEvent
+  ) => {
     e.preventDefault();
-
     setLoading(true);
     setErrorMessage(null);
 
     try {
-      const { data, error } =
-        await supabase.auth.signInWithPassword({
-          email: email.trim().toLowerCase(),
-          password
-        });
+      const credentials = {
+        email: email.trim().toLowerCase(),
+        password
+      };
 
-      if (error) throw error;
+      if (isRegister) {
+        const { data, error } =
+          await supabase.auth.signUp(credentials);
 
-      if (!data.session) {
-        throw new Error('Sessão não iniciada.');
+        if (error) throw error;
+
+        if (!data.session) {
+          setErrorMessage(
+            'Conta criada. Verifique seu e-mail para confirmar o cadastro.'
+          );
+          return;
+        }
+      } else {
+        const { data, error } =
+          await supabase.auth.signInWithPassword(
+            credentials
+          );
+
+        if (error) throw error;
+
+        if (!data.session) {
+          throw new Error('Sessão não iniciada.');
+        }
       }
 
       onSuccess();
-    } catch (error) {
-      console.error('Falha ao entrar no sistema:', error);
-      setErrorMessage(
-        'Não foi possível entrar. Verifique seu e-mail e senha.'
-      );
+    } catch (error: unknown) {
+      const message = error instanceof Error
+        ? error.message
+        : '';
+
+      if (message.includes('already registered')) {
+        setErrorMessage(
+          'Este e-mail já está cadastrado. Utilize Entrar.'
+        );
+      } else if (message.includes('rate limit')) {
+        setErrorMessage(
+          'Limite temporário de tentativas atingido. Tente novamente mais tarde.'
+        );
+      } else {
+        setErrorMessage(
+          'Não foi possível continuar. Verifique os dados informados.'
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -54,7 +86,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-[#f3f5f9] dark:bg-[#0e1320]">
-
       <div className="max-w-md w-full bg-white dark:bg-[#161d2e] rounded-2xl shadow-xl border border-[#dde2ec] dark:border-slate-800 p-8 sm:p-10">
 
         <div className="text-center mb-8">
@@ -69,10 +100,44 @@ export const LoginPage: React.FC<LoginPageProps> = ({
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="flex bg-slate-100 dark:bg-slate-800 rounded-xl p-1 mb-6">
+          <button
+            type="button"
+            onClick={() => {
+              setIsRegister(false);
+              setErrorMessage(null);
+            }}
+            className={`flex-1 py-2.5 text-sm font-semibold rounded-lg ${
+              !isRegister
+                ? 'bg-white dark:bg-slate-700 text-[#2f55d4] shadow-sm'
+                : 'text-slate-500'
+            }`}
+          >
+            Entrar
+          </button>
 
+          <button
+            type="button"
+            onClick={() => {
+              setIsRegister(true);
+              setErrorMessage(null);
+            }}
+            className={`flex-1 py-2.5 text-sm font-semibold rounded-lg ${
+              isRegister
+                ? 'bg-white dark:bg-slate-700 text-[#2f55d4] shadow-sm'
+                : 'text-slate-500'
+            }`}
+          >
+            Criar Conta
+          </button>
+        </div>
+
+        <form
+          onSubmit={handleSubmit}
+          className="space-y-4"
+        >
           <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+            <label className="block text-xs font-semibold mb-1.5 dark:text-white">
               E-mail
             </label>
 
@@ -83,7 +148,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 type="email"
                 required
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={e => setEmail(e.target.value)}
                 placeholder="seu.email@exemplo.com"
                 autoComplete="email"
                 className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
@@ -92,7 +157,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+            <label className="block text-xs font-semibold mb-1.5 dark:text-white">
               Senha
             </label>
 
@@ -102,19 +167,27 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               <input
                 type="password"
                 required
+                minLength={6}
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Sua senha"
-                autoComplete="current-password"
+                onChange={e => setPassword(e.target.value)}
+                placeholder="Mínimo de 6 caracteres"
+                autoComplete={
+                  isRegister
+                    ? 'new-password'
+                    : 'current-password'
+                }
                 className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
               />
             </div>
           </div>
 
           {errorMessage && (
-            <div role="alert" className="flex items-center gap-2 text-xs text-rose-600">
+            <div
+              role="alert"
+              className="flex items-start gap-2 text-xs text-rose-600"
+            >
               <AlertCircle className="w-4 h-4 shrink-0" />
-              {errorMessage}
+              <span>{errorMessage}</span>
             </div>
           )}
 
@@ -123,14 +196,21 @@ export const LoginPage: React.FC<LoginPageProps> = ({
             disabled={loading}
             className="w-full py-3 bg-[#2f55d4] hover:bg-[#2544ad] text-white rounded-xl font-bold flex items-center justify-center gap-2 disabled:opacity-50"
           >
-            {loading ? 'Entrando...' : 'Entrar no Sistema'}
-            {!loading && <ArrowRight className="w-4 h-4" />}
-          </button>
+            {loading
+              ? 'Aguarde...'
+              : isRegister
+                ? 'Criar Conta e Entrar'
+                : 'Entrar no Sistema'
+            }
 
+            {!loading && (
+              <ArrowRight className="w-4 h-4" />
+            )}
+          </button>
         </form>
 
         <p className="text-center text-xs text-slate-400 mt-6">
-          Acesso exclusivo para a equipe autorizada.
+          Lumos Pro — Sistema de Diagnóstico
         </p>
       </div>
     </div>
