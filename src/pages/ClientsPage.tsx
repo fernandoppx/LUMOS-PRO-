@@ -100,7 +100,7 @@ export const ClientsPage: React.FC = () => {
         cleanInsta = cleanInsta.substring(1);
       }
 
-      const { client: createdClient } = await dataRepository.createClient({
+      const createdClient = await dataRepository.createClient({
         nome: formNome.trim(),
         instagram: cleanInsta || null,
         segmento: 'Splash',

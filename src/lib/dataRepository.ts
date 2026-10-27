@@ -15,13 +15,14 @@ import {
 } from '../data/diagnosticData';
 import { getFaixaFromMedia, getRotuloPadrao } from '../utils/formatters';
 
-// Storage keys for local persistence (sem banco externo, sem necessidade de login)
+// Storage keys for local persistence / offline contingency
 const STORAGE_KEYS = {
   CLIENTES: 'lumos_pro_clientes',
   DIAGNOSTICOS: 'lumos_pro_diagnosticos',
   AVALIACOES: 'lumos_pro_avaliacoes',
   PILARES: 'lumos_pro_pilares',
   CRITERIOS: 'lumos_pro_criterios',
+  PENDING_CHANGES: 'lumos_pro_pending_changes',
 } as const;
 
 function generateId(prefix = 'id'): string {
@@ -56,7 +57,7 @@ function saveStorage<T>(key: string, data: T): void {
   }
 }
 
-// Compute scores for a specific diagnostic
+// Compute scores for a specific diagnostic - preserves exact business formula
 export function computeDiagnosticScores(
   diag: Diagnostico,
   client: Cliente | null,
@@ -100,7 +101,7 @@ export function computeDiagnosticScores(
     .map((p) => p.media)
     .filter((m): m is number => m !== null && m !== undefined && !isNaN(m));
 
-  // Overall average is the mean of the 3 pillar averages (or available ones)
+  // Overall average is the mean of the 3 pillar averages
   const mediaGeral =
     validMedias.length > 0
       ? validMedias.reduce((a, b) => a + b, 0) / validMedias.length
@@ -131,99 +132,194 @@ export function computeDiagnosticScores(
   return { diagScore, pilaresScore };
 }
 
+// Request sequence numbers to prevent out-of-order race conditions
+let currentSaveSeq = 0;
+let lastAckSaveSeq = 0;
+
 export const dataRepository = {
   // PILARES & CRITERIOS
   async getPilares(): Promise<Pilar[]> {
-    const saved = loadStorage<Pilar[]>(STORAGE_KEYS.PILARES, []);
-    if (saved && saved.length > 0) return saved;
+    const local = loadStorage<Pilar[]>(STORAGE_KEYS.PILARES, []);
+    if (local.length > 0) return local;
+    saveStorage(STORAGE_KEYS.PILARES, DEFAULT_PILARES);
     return DEFAULT_PILARES;
   },
 
   async getCriterios(): Promise<Criterio[]> {
-    const saved = loadStorage<Criterio[]>(STORAGE_KEYS.CRITERIOS, []);
-    if (saved && saved.length > 0) return saved.filter((c) => c.ativo);
-    return DEFAULT_CRITERIOS.filter((c) => c.ativo);
+    const local = loadStorage<Criterio[]>(STORAGE_KEYS.CRITERIOS, []);
+    if (local.length > 0) return local;
+    saveStorage(STORAGE_KEYS.CRITERIOS, DEFAULT_CRITERIOS);
+    return DEFAULT_CRITERIOS;
   },
 
   // CLIENTES
   async getClients(): Promise<Cliente[]> {
-    const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
-    return clients.sort(
-      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    );
+    try {
+      const res = await fetch('/api/clientes', { credentials: 'same-origin' });
+      if (res.ok) {
+        const backendClients: Cliente[] = await res.json();
+        if (Array.isArray(backendClients)) {
+          saveStorage(STORAGE_KEYS.CLIENTES, backendClients);
+          return backendClients;
+        }
+      }
+    } catch (err) {
+      console.warn('[dataRepository.getClients] Modo contingência offline:', err);
+    }
+    return loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
   },
 
   async getClientById(id: string): Promise<Cliente | null> {
+    try {
+      const res = await fetch(`/api/clientes/${encodeURIComponent(id)}`, { credentials: 'same-origin' });
+      if (res.ok) {
+        const backendClient: Cliente = await res.json();
+        if (backendClient?.id) {
+          const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
+          const index = clients.findIndex((c) => c.id === id);
+          if (index !== -1) {
+            clients[index] = backendClient;
+          } else {
+            clients.unshift(backendClient);
+          }
+          saveStorage(STORAGE_KEYS.CLIENTES, clients);
+          return backendClient;
+        }
+      }
+    } catch (err) {
+      console.warn('[dataRepository.getClientById] Modo contingência offline:', err);
+    }
     const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
     return clients.find((c) => c.id === id) || null;
   },
 
-  async createClient(clientData: Partial<Cliente>): Promise<{ client: Cliente; isLocal: boolean }> {
-    const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
-    const newClient: Cliente = {
-      id: generateId('cli'),
-      nome: clientData.nome?.trim() || 'Cliente sem nome',
+  async createClient(data: Omit<Cliente, 'id' | 'created_at' | 'updated_at'>): Promise<Cliente> {
+    const newId = generateId('client');
+    const localClient: Cliente = {
+      ...data,
+      id: newId,
       segmento: 'Splash',
-      instagram: clientData.instagram ?? null,
-      site: clientData.site ?? null,
-      whatsapp: clientData.whatsapp ?? null,
-      cidade: clientData.cidade ?? null,
-      responsavel: clientData.responsavel ?? null,
-      observacoes: clientData.observacoes ?? null,
-      ativo: clientData.ativo ?? true,
-      criado_por: 'local_user',
+      ativo: data.ativo ?? true,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
 
-    clients.unshift(newClient);
+    try {
+      const res = await fetch('/api/clientes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ ...data, id: newId }),
+      });
+
+      if (res.ok) {
+        const saved: Cliente = await res.json();
+        const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
+        clients.unshift(saved);
+        saveStorage(STORAGE_KEYS.CLIENTES, clients);
+        return saved;
+      }
+    } catch (err) {
+      console.warn('[dataRepository.createClient] Erro ao sincronizar com backend:', err);
+    }
+
+    const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
+    clients.unshift(localClient);
     saveStorage(STORAGE_KEYS.CLIENTES, clients);
-    return { client: newClient, isLocal: true };
+    return localClient;
   },
 
   async updateClient(id: string, updates: Partial<Cliente>): Promise<Cliente> {
     const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
     const index = clients.findIndex((c) => c.id === id);
-    if (index === -1) {
-      throw new Error('Cliente não encontrado para atualização.');
-    }
 
-    const current = clients[index];
-    const updatedClient: Cliente = {
-      ...current,
-      ...updates,
-      id: current.id,
+    let finalClient: Cliente = {
+      id,
+      nome: updates.nome || 'Cliente',
       segmento: 'Splash',
-      created_at: current.created_at,
+      ativo: updates.ativo ?? true,
+      created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
+      ...updates,
     };
 
-    clients[index] = updatedClient;
+    try {
+      const res = await fetch(`/api/clientes/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(updates),
+      });
+
+      if (res.ok) {
+        finalClient = await res.json();
+      }
+    } catch (err) {
+      console.warn('[dataRepository.updateClient] Erro ao sincronizar com backend:', err);
+    }
+
+    if (index !== -1) {
+      clients[index] = finalClient;
+    } else {
+      clients.unshift(finalClient);
+    }
     saveStorage(STORAGE_KEYS.CLIENTES, clients);
-    return updatedClient;
+    return finalClient;
   },
 
   async deleteClient(id: string): Promise<void> {
-    // 1. Remove all client's diagnostics and their evaluations
+    try {
+      await fetch(`/api/clientes/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      });
+    } catch (err) {
+      console.warn('[dataRepository.deleteClient] Falha na rede ao excluir no backend:', err);
+    }
+
+    // Remove local diagnostics and evaluations for this client
     const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
     const clientDiagIds = diags.filter((d) => d.cliente_id === id).map((d) => d.id);
     const diagIdSet = new Set(clientDiagIds);
 
-    const remainingDiags = diags.filter((d) => d.cliente_id !== id);
-    saveStorage(STORAGE_KEYS.DIAGNOSTICOS, remainingDiags);
+    saveStorage(
+      STORAGE_KEYS.DIAGNOSTICOS,
+      diags.filter((d) => d.cliente_id !== id)
+    );
 
     const avaliacoes = loadStorage<Avaliacao[]>(STORAGE_KEYS.AVALIACOES, []);
-    const remainingAvals = avaliacoes.filter((a) => !diagIdSet.has(a.diagnostico_id));
-    saveStorage(STORAGE_KEYS.AVALIACOES, remainingAvals);
+    saveStorage(
+      STORAGE_KEYS.AVALIACOES,
+      avaliacoes.filter((a) => !diagIdSet.has(a.diagnostico_id))
+    );
 
-    // 2. Remove client
     const clients = loadStorage<Cliente[]>(STORAGE_KEYS.CLIENTES, []);
-    const remainingClients = clients.filter((c) => c.id !== id);
-    saveStorage(STORAGE_KEYS.CLIENTES, remainingClients);
+    saveStorage(
+      STORAGE_KEYS.CLIENTES,
+      clients.filter((c) => c.id !== id)
+    );
   },
 
   // DIAGNOSTICOS
   async getDiagnosticsByClient(clienteId: string): Promise<Diagnostico[]> {
+    try {
+      const res = await fetch(`/api/diagnosticos?cliente_id=${encodeURIComponent(clienteId)}`, {
+        credentials: 'same-origin',
+      });
+      if (res.ok) {
+        const backendDiags: Diagnostico[] = await res.json();
+        if (Array.isArray(backendDiags)) {
+          // Reconcilia com o cache local
+          const allDiags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
+          const otherDiags = allDiags.filter((d) => d.cliente_id !== clienteId);
+          saveStorage(STORAGE_KEYS.DIAGNOSTICOS, [...backendDiags, ...otherDiags]);
+          return backendDiags;
+        }
+      }
+    } catch (err) {
+      console.warn('[dataRepository.getDiagnosticsByClient] Contingência offline:', err);
+    }
+
     const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
     return diags
       .filter((d) => d.cliente_id === clienteId)
@@ -231,77 +327,203 @@ export const dataRepository = {
   },
 
   async getDiagnosticById(id: string): Promise<Diagnostico | null> {
+    try {
+      const res = await fetch(`/api/diagnosticos/${encodeURIComponent(id)}`, {
+        credentials: 'same-origin',
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.diagnostico) {
+          const diag: Diagnostico = data.diagnostico;
+          const avals: Avaliacao[] = data.avaliacoes || [];
+
+          // Atualiza cache de diagnósticos
+          const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
+          const index = diags.findIndex((d) => d.id === id);
+          if (index !== -1) {
+            diags[index] = diag;
+          } else {
+            diags.unshift(diag);
+          }
+          saveStorage(STORAGE_KEYS.DIAGNOSTICOS, diags);
+
+          // Atualiza cache de avaliações
+          const existingAvals = loadStorage<Avaliacao[]>(STORAGE_KEYS.AVALIACOES, []);
+          const otherAvals = existingAvals.filter((a) => a.diagnostico_id !== id);
+          saveStorage(STORAGE_KEYS.AVALIACOES, [...otherAvals, ...avals]);
+
+          return diag;
+        }
+      }
+    } catch (err) {
+      console.warn('[dataRepository.getDiagnosticById] Contingência offline:', err);
+    }
+
     const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
     return diags.find((d) => d.id === id) || null;
   },
 
   async createDiagnostic(clienteId: string, userId?: string | null): Promise<Diagnostico> {
-    const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
-    const newDiag: Diagnostico = {
-      id: generateId('diag'),
+    const newId = generateId('diag');
+    const localDiag: Diagnostico = {
+      id: newId,
       cliente_id: clienteId,
       data_referencia: new Date().toISOString().slice(0, 10),
       status: 'rascunho',
       resumo: '',
       compartilhado: false,
       share_token: generateId('token'),
-      criado_por: userId || 'local_user',
+      criado_por: userId || 'lumos_app',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
 
-    diags.unshift(newDiag);
-    saveStorage(STORAGE_KEYS.DIAGNOSTICOS, diags);
-    return newDiag;
-  },
+    try {
+      const res = await fetch('/api/diagnosticos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          id: newId,
+          cliente_id: clienteId,
+          criado_por: userId,
+          data_referencia: localDiag.data_referencia,
+        }),
+      });
 
-  async updateDiagnostic(id: string, updates: Partial<Diagnostico>): Promise<Diagnostico> {
-    const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
-    const index = diags.findIndex((d) => d.id === id);
-    if (index === -1) {
-      throw new Error('Diagnóstico não encontrado para atualização.');
+      if (res.ok) {
+        const created: Diagnostico = await res.json();
+        const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
+        diags.unshift(created);
+        saveStorage(STORAGE_KEYS.DIAGNOSTICOS, diags);
+        return created;
+      }
+    } catch (err) {
+      console.warn('[dataRepository.createDiagnostic] Falha na rede ao criar no backend:', err);
     }
 
-    const current = diags[index];
-    const updatedDiag: Diagnostico = {
-      ...current,
-      ...updates,
-      id: current.id,
-      cliente_id: current.cliente_id,
-      created_at: current.created_at,
-      updated_at: new Date().toISOString(),
-    };
+    const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
+    diags.unshift(localDiag);
+    saveStorage(STORAGE_KEYS.DIAGNOSTICOS, diags);
+    return localDiag;
+  },
 
-    diags[index] = updatedDiag;
+  async updateDiagnostic(
+    id: string,
+    updates: Partial<Diagnostico>,
+    baseVersion?: string
+  ): Promise<Diagnostico> {
+    const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
+    const index = diags.findIndex((d) => d.id === id);
+
+    let updatedDiag: Diagnostico = {
+      ...(index !== -1 ? diags[index] : {}),
+      ...updates,
+      id,
+      cliente_id: index !== -1 ? diags[index].cliente_id : '',
+      created_at: index !== -1 ? diags[index].created_at : new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as Diagnostico;
+
+    try {
+      const res = await fetch(`/api/diagnosticos/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ ...updates, base_version: baseVersion }),
+      });
+
+      if (res.status === 409) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Conflito de versão detectado no diagnóstico.');
+      }
+
+      if (res.ok) {
+        updatedDiag = await res.json();
+      }
+    } catch (err) {
+      console.warn('[dataRepository.updateDiagnostic] Erro ou conflito ao atualizar:', err);
+      throw err;
+    }
+
+    if (index !== -1) {
+      diags[index] = updatedDiag;
+    } else {
+      diags.unshift(updatedDiag);
+    }
     saveStorage(STORAGE_KEYS.DIAGNOSTICOS, diags);
     return updatedDiag;
   },
 
   async deleteDiagnostic(id: string): Promise<void> {
+    try {
+      await fetch(`/api/diagnosticos/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      });
+    } catch (err) {
+      console.warn('[dataRepository.deleteDiagnostic] Falha de rede ao excluir:', err);
+    }
+
     // 1. Remove evaluations
     const avals = loadStorage<Avaliacao[]>(STORAGE_KEYS.AVALIACOES, []);
-    const remainingAvals = avals.filter((a) => a.diagnostico_id !== id);
-    saveStorage(STORAGE_KEYS.AVALIACOES, remainingAvals);
+    saveStorage(
+      STORAGE_KEYS.AVALIACOES,
+      avals.filter((a) => a.diagnostico_id !== id)
+    );
 
     // 2. Remove diagnostic
     const diags = loadStorage<Diagnostico[]>(STORAGE_KEYS.DIAGNOSTICOS, []);
-    const remainingDiags = diags.filter((d) => d.id !== id);
-    saveStorage(STORAGE_KEYS.DIAGNOSTICOS, remainingDiags);
+    saveStorage(
+      STORAGE_KEYS.DIAGNOSTICOS,
+      diags.filter((d) => d.id !== id)
+    );
   },
 
   // AVALIACOES
   async getAvaliacoes(diagnosticId: string): Promise<Avaliacao[]> {
+    // 1. Tenta carregar do backend
+    try {
+      const res = await fetch(`/api/diagnosticos/${encodeURIComponent(diagnosticId)}`, {
+        credentials: 'same-origin',
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.avaliacoes && Array.isArray(data.avaliacoes)) {
+          const avals: Avaliacao[] = data.avaliacoes;
+          const allAvals = loadStorage<Avaliacao[]>(STORAGE_KEYS.AVALIACOES, []);
+          const otherAvals = allAvals.filter((a) => a.diagnostico_id !== diagnosticId);
+          saveStorage(STORAGE_KEYS.AVALIACOES, [...otherAvals, ...avals]);
+          return avals;
+        }
+      }
+    } catch (err) {
+      console.warn('[dataRepository.getAvaliacoes] Contingência offline:', err);
+    }
+
     const avals = loadStorage<Avaliacao[]>(STORAGE_KEYS.AVALIACOES, []);
     return avals.filter((a) => a.diagnostico_id === diagnosticId);
   },
 
   async saveAvaliacoes(
     diagnosticId: string,
-    items: Array<{ criterio_id: string; nota: number | null; solucao: string | null }>
-  ): Promise<void> {
-    if (!items.length) return;
-    const avals = loadStorage<Avaliacao[]>(STORAGE_KEYS.AVALIACOES, []);
+    items: Array<{
+      criterio_id: string;
+      nota: number | null;
+      solucao?: string | null;
+      observacao?: string | null;
+      recomendacao?: string | null;
+      evidencia_url?: string | null;
+      id?: string;
+    }>,
+    baseVersion?: string
+  ): Promise<{ success: boolean; updated_at?: string }> {
+    if (!items.length) return { success: true };
 
+    const thisSeq = ++currentSaveSeq;
+
+    // Atualiza imediatamente o buffer local
+    const avals = loadStorage<Avaliacao[]>(STORAGE_KEYS.AVALIACOES, []);
     for (const item of items) {
       const existingIndex = avals.findIndex(
         (a) => a.diagnostico_id === diagnosticId && a.criterio_id === item.criterio_id
@@ -311,20 +533,60 @@ export const dataRepository = {
         avals[existingIndex] = {
           ...avals[existingIndex],
           nota: item.nota,
-          solucao: item.solucao,
+          solucao: item.solucao !== undefined ? item.solucao : avals[existingIndex].solucao,
+          observacao: item.observacao !== undefined ? item.observacao : avals[existingIndex].observacao,
+          recomendacao: item.recomendacao !== undefined ? item.recomendacao : avals[existingIndex].recomendacao,
+          evidencia_url: item.evidencia_url !== undefined ? item.evidencia_url : avals[existingIndex].evidencia_url,
         };
       } else {
         avals.push({
-          id: generateId('aval'),
+          id: item.id || generateId('aval'),
           diagnostico_id: diagnosticId,
           criterio_id: item.criterio_id,
           nota: item.nota,
-          solucao: item.solucao,
+          solucao: item.solucao || null,
+          observacao: item.observacao || null,
+          recomendacao: item.recomendacao || null,
+          evidencia_url: item.evidencia_url || null,
         });
       }
     }
-
     saveStorage(STORAGE_KEYS.AVALIACOES, avals);
+
+    // Sincroniza com o Supabase via Backend API
+    try {
+      const res = await fetch(`/api/diagnosticos/${encodeURIComponent(diagnosticId)}/avaliacoes`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          items,
+          base_version: baseVersion,
+        }),
+      });
+
+      if (res.status === 409) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Conflito de concorrência detectado.');
+      }
+
+      if (!res.ok) {
+        throw new Error(`Erro do servidor (${res.status}) ao gravar avaliações.`);
+      }
+
+      // Descarte de resposta fora de ordem (race condition prevention)
+      if (thisSeq < lastAckSaveSeq) {
+        console.warn(`[dataRepository.saveAvaliacoes] Resposta fora de ordem descartada (seq: ${thisSeq} < ${lastAckSaveSeq})`);
+        return { success: true };
+      }
+      lastAckSaveSeq = thisSeq;
+
+      const data = await res.json();
+      return { success: true, updated_at: data.updated_at };
+    } catch (err) {
+      console.warn('[dataRepository.saveAvaliacoes] Falha ao persistir no Supabase:', err);
+      throw err;
+    }
   },
 
   // SCORES & VIEWS

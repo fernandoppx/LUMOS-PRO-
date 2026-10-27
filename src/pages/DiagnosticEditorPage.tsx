@@ -127,11 +127,21 @@ export const DiagnosticEditorPage: React.FC<DiagnosticEditorPageProps> = ({ diag
     ) => {
       setSaveStatus('salvando');
       try {
+        const baseVersion = diagnostic?.updated_at || undefined;
+
         // Update diagnostic metadata
-        await dataRepository.updateDiagnostic(diagnosticId, {
-          resumo: updatedResumo,
-          data_referencia: updatedDataRef,
-        });
+        const updated = await dataRepository.updateDiagnostic(
+          diagnosticId,
+          {
+            resumo: updatedResumo,
+            data_referencia: updatedDataRef,
+          },
+          baseVersion
+        );
+
+        if (updated) {
+          setDiagnostic((prev) => (prev ? { ...prev, updated_at: updated.updated_at } : prev));
+        }
 
         // Upsert modified evaluations
         const dirtyItems: Array<{
@@ -151,7 +161,15 @@ export const DiagnosticEditorPage: React.FC<DiagnosticEditorPageProps> = ({ diag
         });
 
         if (dirtyItems.length > 0) {
-          await dataRepository.saveAvaliacoes(diagnosticId, dirtyItems);
+          const res = await dataRepository.saveAvaliacoes(
+            diagnosticId,
+            dirtyItems,
+            updated?.updated_at || baseVersion
+          );
+
+          if (res?.updated_at) {
+            setDiagnostic((prev) => (prev ? { ...prev, updated_at: res.updated_at } : prev));
+          }
 
           // Clear isDirty flags
           setAvaliacoesMap((prev) => {
@@ -166,13 +184,14 @@ export const DiagnosticEditorPage: React.FC<DiagnosticEditorPageProps> = ({ diag
           });
         }
 
+        // Confirmado pelo banco
         setSaveStatus('salvo');
       } catch (err) {
         console.error('Falha no salvamento automático:', err);
         setSaveStatus('erro');
       }
     },
-    [diagnosticId]
+    [diagnosticId, diagnostic?.updated_at]
   );
 
   const scheduleSave = (
@@ -186,7 +205,7 @@ export const DiagnosticEditorPage: React.FC<DiagnosticEditorPageProps> = ({ diag
     setSaveStatus('salvando');
     saveTimeoutRef.current = setTimeout(() => {
       triggerAutoSave(nextMap, nextResumo, nextDataRef);
-    }, 600);
+    }, 1000);
   };
 
   const handleSetNota = (criterioId: string, nota: number) => {
