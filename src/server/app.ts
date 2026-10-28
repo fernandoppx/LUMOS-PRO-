@@ -1,3 +1,4 @@
+
 import express from 'express';
 
 import {
@@ -5,14 +6,16 @@ import {
   requireTeamAccess
 } from './middleware/security';
 
+import { clientesRouter } from './routes/clientes';
+import { diagnosticosRouter } from './routes/diagnosticos';
+
 export const app = express();
 
 app.disable('x-powered-by');
 
-// Receber dados JSON do frontend
 app.use(express.json({ limit: '1mb' }));
 
-// Verificar se o backend está funcionando
+// Verificação pública do servidor
 app.get('/api/health', (_req, res) => {
   res.status(200).json({
     status: 'ok',
@@ -20,23 +23,26 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-// Exigir autenticação em todas as APIs
+// Proteção das APIs privadas
 app.use('/api', rateLimiter);
 app.use('/api', requireTeamAccess);
 
-// Teste da sessão autenticada
+// Dados do usuário autenticado
 app.get('/api/me', (req, res) => {
-  res.status(200).json({
+  res.json({
     id: req.lumosUser!.id,
     email: req.lumosUser!.email,
     papel: req.lumosUser!.papel
   });
 });
 
-// Bloqueio até implementar as regras de propriedade
+// Clientes e diagnósticos
+app.use('/api/clientes', clientesRouter);
+app.use('/api/diagnosticos', diagnosticosRouter);
+
+// Rotas de API inexistentes
 app.use('/api', (_req, res) => {
-  res.status(503).json({
-    error:
-      'Operações temporariamente indisponíveis até a configuração das permissões por usuário.'
+  res.status(404).json({
+    error: 'Rota de API não encontrada.'
   });
 });
