@@ -4,23 +4,23 @@ import {
   issueTeamSessionCookie,
   requireTeamAccess,
   rateLimiter
-} from './middleware/security';
+} from './middleware/security.js';
 
 import {
   clientesRouter
-} from './routes/clientes';
+} from './routes/clientes.js';
 
 import {
   diagnosticosRouter
-} from './routes/diagnosticos';
+} from './routes/diagnosticos.js';
 
 import {
   adminRouter
-} from './routes/admin';
+} from './routes/admin.js';
 
-import { supabaseServer } from './supabase';
-import { DEFAULT_PILARES, DEFAULT_CRITERIOS } from '../data/diagnosticData';
-import { getFaixaFromMedia, getRotuloPadrao } from '../utils/formatters';
+import { supabaseServer } from './supabase.js';
+import { DEFAULT_PILARES, DEFAULT_CRITERIOS } from '../data/diagnosticData.js';
+import { getFaixaFromMedia, getRotuloPadrao } from '../utils/formatters.js';
 
 export const app = express();
 
