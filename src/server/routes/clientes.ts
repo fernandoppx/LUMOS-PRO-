@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
-import { supabaseServer } from '../supabase';
+import { supabaseServer } from '../supabase.js';
 
 export const clientesRouter = Router();
 
