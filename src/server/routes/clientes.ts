@@ -280,6 +280,40 @@ clientesRouter.delete('/:id', async (req, res) => {
 
   try {
     // Exclusão restrita ao proprietário ou administrador
+    let acesso = supabaseServer
+      .from('clientes')
+      .select('id')
+      .eq('id', req.params.id);
+    acesso = applyOwnership(acesso, user);
+    const { data: permitido, error: acessoError } = await acesso.maybeSingle();
+    if (acessoError) throw acessoError;
+    if (!permitido) {
+      res.status(404).json({
+        error: 'Cliente não encontrado ou sem acesso.'
+      });
+      return;
+    }
+
+    // Remove avaliações e diagnósticos do cliente antes (não depende de CASCADE no banco)
+    const { data: diags, error: diagsError } = await supabaseServer
+      .from('diagnosticos')
+      .select('id')
+      .eq('cliente_id', req.params.id);
+    if (diagsError) throw diagsError;
+    const diagIds = (diags || []).map((d) => d.id);
+    if (diagIds.length > 0) {
+      const { error: avError } = await supabaseServer
+        .from('avaliacoes')
+        .delete()
+        .in('diagnostico_id', diagIds);
+      if (avError) throw avError;
+      const { error: dError } = await supabaseServer
+        .from('diagnosticos')
+        .delete()
+        .eq('cliente_id', req.params.id);
+      if (dError) throw dError;
+    }
+
     let query = supabaseServer
       .from('clientes')
       .delete()
