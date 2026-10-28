@@ -4,11 +4,17 @@ const supabaseUrl =
   'https://jjbfrrlsoelequgtwgmz.supabase.co';
 
 const supabaseKey =
-  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim();
 
-if (!supabaseKey) {
+if (
+  !supabaseKey ||
+  !(
+    supabaseKey.startsWith('sb_publishable_') ||
+    supabaseKey.startsWith('eyJ')
+  )
+) {
   throw new Error(
-    'Chave pública do Supabase não configurada.'
+    'Chave pública inválida ou ausente. Verifique VITE_SUPABASE_PUBLISHABLE_KEY.'
   );
 }
 
