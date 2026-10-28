@@ -173,6 +173,7 @@ export default function App() {
         <DiagnosticDashboardPage
           diagnosticId={parts[0]}
           initialPilarSlug={parts[1]}
+          canExportPdf={currentUser?.papel === 'administrador'}
         />
       );
     }
