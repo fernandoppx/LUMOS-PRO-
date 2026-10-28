@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import crypto from 'node:crypto';
-import { supabaseServer } from '../supabase';
+import { supabaseServer } from '../supabase.js';
 
 export const diagnosticosRouter = Router();
 
