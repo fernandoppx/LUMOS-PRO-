@@ -40,6 +40,7 @@ import {
 interface DiagnosticDashboardPageProps {
   diagnosticId: string;
   initialPilarSlug?: string;
+  canExportPdf?: boolean;
 }
 
 interface LocalEvaluation {
@@ -51,6 +52,7 @@ interface LocalEvaluation {
 export const DiagnosticDashboardPage: React.FC<DiagnosticDashboardPageProps> = ({
   diagnosticId,
   initialPilarSlug,
+  canExportPdf = false,
 }) => {
   const [diagnostic, setDiagnostic] = useState<Diagnostico | null>(null);
   const [client, setClient] = useState<Cliente | null>(null);
@@ -232,7 +234,7 @@ export const DiagnosticDashboardPage: React.FC<DiagnosticDashboardPageProps> = (
 
   // PDF Generation
   const handleGeneratePdf = async () => {
-    if (!client || !diagnostic) return;
+    if (!client || !diagnostic || !canExportPdf) return;
     setGeneratingPdf(true);
     try {
       const safeClient = client.nome.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -328,6 +330,7 @@ export const DiagnosticDashboardPage: React.FC<DiagnosticDashboardPageProps> = (
             <span>Editar Notas</span>
           </a>
 
+          {canExportPdf && (
           <button
             type="button"
             onClick={handleGeneratePdf}
@@ -337,6 +340,7 @@ export const DiagnosticDashboardPage: React.FC<DiagnosticDashboardPageProps> = (
             <FileDown className="w-4 h-4" />
             <span>{generatingPdf ? 'Gerando PDF...' : 'Gerar PDF'}</span>
           </button>
+          )}
         </div>
       </div>
 
