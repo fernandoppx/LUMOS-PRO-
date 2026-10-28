@@ -1,11 +1,29 @@
-export type PapelUsuario = 'admin' | 'analista';
+export type LumosRole = 'administrador' | 'auditor';
+export type PapelUsuario = 'admin' | 'analista' | 'administrador' | 'auditor';
+
+export interface CurrentUser {
+  id: string;
+  nome: string;
+  email: string;
+  papel: LumosRole;
+}
+
+export interface AdminUser {
+  id: string;
+  nome: string;
+  email: string;
+  papel: LumosRole;
+  created_at: string;
+  clientes_count: number;
+  diagnosticos_count: number;
+}
 
 export interface Profile {
   id: string;
   nome: string;
   email: string;
-  papel: PapelUsuario;
-  aprovado: boolean;
+  papel: LumosRole | PapelUsuario;
+  aprovado?: boolean;
   created_at: string;
 }
 
