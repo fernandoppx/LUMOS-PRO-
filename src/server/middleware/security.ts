@@ -75,6 +75,11 @@ export function rateLimiter(
   next();
 }
 
+// Cache curto (60s) de sessões já validadas: evita repetir a consulta ao
+// Supabase Auth + tabela perfis a cada requisição da mesma sessão.
+const AUTH_CACHE_TTL_MS = 60_000;
+const authCache = new Map<string, { user: LumosUser; expiresAt: number }>();
+
 // Validação de identidade e perfil real no Supabase Auth + tabela perfis
 export async function requireTeamAccess(
   req: Request,
@@ -100,6 +105,13 @@ export async function requireTeamAccess(
       res.status(401).json({
         error: 'Token de acesso ausente.'
       });
+      return;
+    }
+
+    const cached = authCache.get(token);
+    if (cached && cached.expiresAt > Date.now()) {
+      req.lumosUser = cached.user;
+      next();
       return;
     }
 
@@ -184,6 +196,12 @@ export async function requireTeamAccess(
       email: data.user.email || '',
       papel
     };
+
+    if (authCache.size > 500) authCache.clear();
+    authCache.set(token, {
+      user: req.lumosUser!,
+      expiresAt: Date.now() + AUTH_CACHE_TTL_MS
+    });
 
     next();
   } catch (error) {
