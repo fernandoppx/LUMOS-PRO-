@@ -4,7 +4,7 @@ import type {
   NextFunction
 } from 'express';
 
-import { supabaseServer } from '../supabase';
+import { supabaseServer } from '../supabase.js';
 
 export type LumosRole = 'administrador' | 'auditor';
 
